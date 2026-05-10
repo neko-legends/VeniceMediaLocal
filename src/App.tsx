@@ -21,7 +21,7 @@ import {
   Wand2,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { ChangeEvent, DragEvent, FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, MouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 
 type ModeId = 'image' | 'edit' | 'video' | 'music' | 'sfx' | 'voice' | 'transcribe' | 'models' | 'settings'
 type ModelKind = 'image' | 'edit' | 'video' | 'music' | 'sfx' | 'voice' | 'transcribe'
@@ -387,9 +387,49 @@ function formatElapsed(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`
 }
 
+function metadataValue(metadata: unknown, path: string[]): unknown {
+  let current = metadata
+  for (const key of path) {
+    if (!current || typeof current !== 'object' || !(key in current)) return undefined
+    current = (current as Record<string, unknown>)[key]
+  }
+  return current
+}
+
+function metadataText(metadata: unknown, paths: string[][]): string {
+  for (const path of paths) {
+    const value = metadataValue(metadata, path)
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function resultModelLabel(result: MediaResult): string {
+  return metadataText(result.metadata, [
+    ['model'],
+    ['request', 'model'],
+    ['raw', 'model'],
+    ['raw', 'request', 'model'],
+    ['raw', 'data', 'model'],
+  ])
+}
+
 function isTranscribableFile(file: File): boolean {
   if (file.type.startsWith('audio/') || file.type.startsWith('video/')) return true
   return /\.(mp3|m4a|wav|webm|flac|ogg|aac|mp4|mpeg)$/i.test(file.name)
+}
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith('image/')
+}
+
+function clipboardFile(items: DataTransferItemList): File | null {
+  for (const item of Array.from(items)) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      return item.getAsFile()
+    }
+  }
+  return null
 }
 
 function classNames(...items: Array<string | false | null | undefined>): string {
@@ -922,8 +962,19 @@ export function App() {
     setEditSourceImages((existing) => existing.map((source, sourceIndex) => (sourceIndex === index ? dataUrl : source)))
   }
 
+  function setEditSourceImage(index: number, dataUrl: string) {
+    setEditSourceImages((existing) => existing.map((source, sourceIndex) => (sourceIndex === index ? dataUrl : source)))
+  }
+
   function clearEditSourceImage(index: number) {
     setEditSourceImages((existing) => existing.map((source, sourceIndex) => (sourceIndex === index ? '' : source)))
+  }
+
+  function sendResultToEdit(result: MediaResult) {
+    setEditSourceImage(0, result.dataUrl)
+    setMode('edit')
+    setStatus('Image loaded into edit slot 1')
+    setLastActionMs(null)
   }
 
   function queueVideo(event: FormEvent) {
@@ -1164,6 +1215,7 @@ export function App() {
                     label="Image 1"
                     source={editSourceImages[0]}
                     onFile={(file) => loadEditSourceImage(0, file)}
+                    onSource={(value) => setEditSourceImage(0, value)}
                     onClear={() => clearEditSourceImage(0)}
                   />
                   <div className="edit-source-row">
@@ -1173,6 +1225,7 @@ export function App() {
                         label={`Image ${index + 1}`}
                         source={editSourceImages[index]}
                         onFile={(file) => loadEditSourceImage(index, file)}
+                        onSource={(value) => setEditSourceImage(index, value)}
                         onClear={() => clearEditSourceImage(index)}
                       />
                     ))}
@@ -1199,7 +1252,7 @@ export function App() {
             {mode === 'video' && (
               <form onSubmit={queueVideo} className="tool-form">
                 <ModelSelect label="Model" value={videoModel} onChange={setVideoModel} models={videoModels} />
-                <SourcePicker label="Source Image" source={sourceImage} onFile={loadSourceImage} />
+                <SourcePicker label="Source Image" source={sourceImage} onFile={loadSourceImage} onSource={setSourceImage} />
                 <PromptArea label="Motion prompt" value={prompt} onChange={setPrompt} />
                 <PromptArea label="Negative prompt" value={negativePrompt} onChange={setNegativePrompt} rows={3} />
                 <div className="control-grid">
@@ -1430,26 +1483,12 @@ export function App() {
                   </div>
                   <div className={classNames('result-group-grid', group.kind !== 'images' && 'single')}>
                     {group.results.map((result) => (
-                      <article className="result-item" key={result.id}>
-                        {result.mimeType.startsWith('image/') && <img src={result.dataUrl} alt={result.name} />}
-                        {result.mimeType.startsWith('video/') && <video src={result.dataUrl} controls />}
-                        {result.mimeType.startsWith('audio/') && <audio src={result.dataUrl} controls />}
-                        {result.mimeType.startsWith('text/') && <pre className="transcript-preview">{result.text}</pre>}
-                        <div className="result-meta">
-                          <strong>{result.name}</strong>
-                          <small>{result.filePath}</small>
-                          <div className="result-links">
-                            <a href={result.dataUrl} download={result.name}>
-                              <Download size={16} />
-                              Save
-                            </a>
-                            <button className="link-button danger" type="button" onClick={() => moveResultFilesToBurn([result.filePath], 'this file')}>
-                              <Trash2 size={14} />
-                              Delete
-                            </button>
-                          </div>
-                        </div>
-                      </article>
+                      <ResultCard
+                        key={result.id}
+                        result={result}
+                        onDelete={() => moveResultFilesToBurn([result.filePath], 'this file')}
+                        onEdit={result.mimeType.startsWith('image/') ? () => sendResultToEdit(result) : undefined}
+                      />
                     ))}
                   </div>
                 </section>
@@ -1459,6 +1498,52 @@ export function App() {
         </section>
       </main>
     </div>
+  )
+}
+
+function ResultCard({ result, onDelete, onEdit }: { result: MediaResult; onDelete: () => void; onEdit?: () => void }) {
+  const modelLabel = resultModelLabel(result)
+
+  return (
+    <article className="result-item">
+      {result.mimeType.startsWith('image/') && (
+        <img
+          src={result.dataUrl}
+          alt={result.name}
+          draggable
+          onDragStart={(event) => {
+            event.dataTransfer.setData('application/x-venice-image', result.dataUrl)
+            event.dataTransfer.setData('text/plain', result.dataUrl)
+            event.dataTransfer.setData('text/uri-list', result.dataUrl)
+            event.dataTransfer.effectAllowed = 'copy'
+          }}
+        />
+      )}
+      {result.mimeType.startsWith('video/') && <video src={result.dataUrl} controls />}
+      {result.mimeType.startsWith('audio/') && <audio src={result.dataUrl} controls />}
+      {result.mimeType.startsWith('text/') && <pre className="transcript-preview">{result.text}</pre>}
+      <div className="result-meta">
+        <strong>{result.name}</strong>
+        {modelLabel && <small>Model: {modelLabel}</small>}
+        <small>{result.filePath}</small>
+        <div className="result-links">
+          <a href={result.dataUrl} download={result.name}>
+            <Download size={16} />
+            Save
+          </a>
+          {onEdit && (
+            <button className="link-button" type="button" onClick={onEdit}>
+              <Scissors size={14} />
+              Edit
+            </button>
+          )}
+          <button className="link-button danger" type="button" onClick={onDelete}>
+            <Trash2 size={14} />
+            Delete
+          </button>
+        </div>
+      </div>
+    </article>
   )
 }
 
@@ -1654,19 +1739,45 @@ function SourcePicker({
   label,
   source,
   onFile,
+  onSource,
   onClear,
 }: {
   className?: string
   label: string
   source: string
   onFile: (file: File) => void | Promise<void>
+  onSource?: (source: string) => void
   onClear?: () => void
 }) {
   const [dragging, setDragging] = useState(false)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
 
   function chooseFile(file: File | undefined) {
-    if (!file || !file.type.startsWith('image/')) return
+    if (!file || !isImageFile(file)) return
     void onFile(file)
+  }
+
+  function chooseSource(value: string) {
+    const trimmed = value.trim()
+    if (!trimmed.startsWith('data:image/')) return
+    onSource?.(trimmed)
+  }
+
+  async function pasteFromClipboard() {
+    setContextMenu(null)
+    try {
+      const items = await navigator.clipboard?.read?.()
+      for (const item of items ?? []) {
+        const imageType = item.types.find((type) => type.startsWith('image/'))
+        if (!imageType) continue
+        const blob = await item.getType(imageType)
+        chooseFile(new File([blob], `${label.toLowerCase().replace(/\s+/g, '-')}.${imageType.split('/')[1] || 'png'}`, { type: imageType }))
+        return
+      }
+    } catch {
+      // The normal paste event still works when direct clipboard reads are blocked.
+    }
   }
 
   function handleInput(event: ChangeEvent<HTMLInputElement>) {
@@ -1674,15 +1785,39 @@ function SourcePicker({
     event.currentTarget.value = ''
   }
 
-  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
     setDragging(false)
-    chooseFile(Array.from(event.dataTransfer.files).find((file) => file.type.startsWith('image/')))
+    chooseFile(Array.from(event.dataTransfer.files).find(isImageFile))
+    chooseSource(event.dataTransfer.getData('application/x-venice-image') || event.dataTransfer.getData('text/uri-list') || event.dataTransfer.getData('text/plain'))
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
+    const file = clipboardFile(event.clipboardData.items)
+    if (file) {
+      event.preventDefault()
+      chooseFile(file)
+      return
+    }
+
+    const text = event.clipboardData.getData('text/plain')
+    if (text.trim().startsWith('data:image/')) {
+      event.preventDefault()
+      chooseSource(text)
+    }
+  }
+
+  function handleContextMenu(event: MouseEvent<HTMLDivElement>) {
+    event.preventDefault()
+    setContextMenu({ x: event.clientX, y: event.clientY })
   }
 
   return (
     <div className={classNames('source-picker', className)}>
-      <label
+      <input ref={inputRef} className="source-file-input" type="file" accept="image/*" onChange={handleInput} />
+      <div
+        role="button"
+        tabIndex={0}
         className={classNames('source-input', dragging && 'dragging')}
         onDragEnter={(event) => {
           event.preventDefault()
@@ -1691,18 +1826,31 @@ function SourcePicker({
         onDragOver={(event) => event.preventDefault()}
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
+        onPaste={handlePaste}
+        onContextMenu={handleContextMenu}
+        onClick={() => setContextMenu(null)}
       >
-        <input type="file" accept="image/*" onChange={handleInput} />
         {source && <img src={source} alt={label} />}
         <span className={classNames('source-label', source && 'loaded')}>
           {!source && <ImageIcon size={18} />}
           {label}
+          {!source && <small>Drag/Drop/Paste</small>}
         </span>
-      </label>
+      </div>
+      <button className="icon-button compact source-browse" type="button" onClick={() => inputRef.current?.click()} title={`Browse for ${label}`}>
+        <FolderOpen size={14} />
+      </button>
       {source && onClear && (
         <button className="icon-button compact source-clear" type="button" onClick={onClear} title={`Clear ${label}`}>
           <Trash2 size={14} />
         </button>
+      )}
+      {contextMenu && (
+        <div className="source-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          <button type="button" onClick={pasteFromClipboard}>
+            Paste
+          </button>
+        </div>
       )}
     </div>
   )

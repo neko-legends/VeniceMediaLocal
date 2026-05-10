@@ -478,6 +478,14 @@ button {
   min-width: 0;
 }
 
+.source-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .edit-source-layout {
   display: grid;
   justify-items: center;
@@ -522,11 +530,10 @@ button {
   background: color-mix(in srgb, var(--surface) 82%, var(--accent) 18%);
 }
 
-.source-input input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
+.source-input:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent);
+  outline: none;
 }
 
 .source-input img,
@@ -537,13 +544,20 @@ button {
 .source-label {
   display: inline-grid;
   place-items: center;
-  gap: 8px;
+  gap: 5px;
   min-width: 90px;
   padding: 8px 12px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface-2) 88%, var(--accent) 12%);
   color: var(--muted);
   font-weight: 700;
+}
+
+.source-label small {
+  color: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.8;
 }
 
 .source-label.loaded {
@@ -564,6 +578,38 @@ button {
   position: absolute;
   top: 8px;
   right: 8px;
+}
+
+.source-browse {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+}
+
+.source-context-menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 112px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  box-shadow: var(--shadow);
+}
+
+.source-context-menu button {
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.source-context-menu button:hover {
+  background: var(--surface-3);
 }
 
 .transcribe-picker {
