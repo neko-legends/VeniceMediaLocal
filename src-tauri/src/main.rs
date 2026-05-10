@@ -669,17 +669,22 @@ fn save_media_bytes(
     metadata: Value,
 ) -> Result<MediaResult, String> {
     let settings = read_settings(app);
-    let timestamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S-%3f").to_string();
     let stem = safe_stem(prompt);
     let ext = extension_for_mime(mime_type);
     let dir = output_root(app, &settings)?.join(kind);
     fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    let name = format!("{timestamp}-{stem}.{ext}");
+    let variant_suffix = metadata
+        .get("variantIndex")
+        .and_then(|value| value.as_u64())
+        .map(|index| format!("-v{index}"))
+        .unwrap_or_default();
+    let name = format!("{timestamp}-{stem}{variant_suffix}.{ext}");
     let path = dir.join(&name);
     fs::write(&path, bytes).map_err(|err| err.to_string())?;
     let encoded = general_purpose::STANDARD.encode(bytes);
     Ok(MediaResult {
-        id: format!("{kind}-{timestamp}-{stem}"),
+        id: format!("{kind}-{timestamp}-{stem}{variant_suffix}"),
         kind: kind.to_string(),
         name,
         mime_type: mime_type.to_string(),

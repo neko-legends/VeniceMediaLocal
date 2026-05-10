@@ -65,6 +65,13 @@ type MediaResult = {
   metadata?: unknown
 }
 
+type ResultGroup = {
+  id: string
+  kind: string
+  title: string
+  results: MediaResult[]
+}
+
 type QueueResult = {
   queueId: string
   status: string
@@ -216,6 +223,16 @@ function classNames(...items: Array<string | false | null | undefined>): string 
   return items.filter(Boolean).join(' ')
 }
 
+function createResultGroup(results: MediaResult[], title: string): ResultGroup {
+  const kind = results[0]?.kind ?? 'media'
+  return {
+    id: `${kind}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    kind,
+    title,
+    results,
+  }
+}
+
 export function App() {
   const [mode, setMode] = useState<ModeId>('image')
   const [models, setModels] = useState<ModelCache>(fallbackModels)
@@ -227,7 +244,7 @@ export function App() {
   const [loading, setLoading] = useState(false)
   const [refreshingModels, setRefreshingModels] = useState(false)
   const [overrides, setOverrides] = useState<Overrides>(() => readOverrides())
-  const [results, setResults] = useState<MediaResult[]>([])
+  const [resultGroups, setResultGroups] = useState<ResultGroup[]>([])
   const [queue, setQueue] = useState<QueueResult | null>(null)
 
   const imageModels = useMemo(() => modelList(models, overrides, 'image'), [models, overrides])
@@ -315,6 +332,7 @@ export function App() {
   const videoResolutions = controlArray(currentVideoModel, 'resolutionOptions', ['480p', '720p', '1080p'])
   const videoRatios = controlArray(currentVideoModel, 'aspectRatioOptions', ['16:9', '9:16', '1:1'])
   const voiceOptions = controlArray(currentVoiceModel, 'voices', ['am_eric', 'af_bella', 'af_nova'])
+  const resultCount = resultGroups.reduce((total, group) => total + group.results.length, 0)
 
   async function runAction<T>(label: string, action: () => Promise<T>): Promise<T | null> {
     setError('')
@@ -391,7 +409,7 @@ export function App() {
         },
       }),
     )
-    if (output) setResults((existing) => [...output, ...existing])
+    if (output) setResultGroups((existing) => [createResultGroup(output, `${output.length} image${output.length === 1 ? '' : 's'}`), ...existing])
   }
 
   async function loadSourceImage(event: ChangeEvent<HTMLInputElement>) {
@@ -452,7 +470,8 @@ export function App() {
     if (!output) return
     setQueue((existing) => existing ? { ...existing, status: output.status, progressLabel: output.progressLabel } : existing)
     if (output.result) {
-      setResults((existing) => [output.result as MediaResult, ...existing])
+      const result = output.result
+      setResultGroups((existing) => [createResultGroup([result], result.kind), ...existing])
       setQueue(null)
     }
   }
@@ -471,7 +490,7 @@ export function App() {
         },
       }),
     )
-    if (output) setResults((existing) => [output, ...existing])
+    if (output) setResultGroups((existing) => [createResultGroup([output], 'Voice'), ...existing])
   }
 
   function addCustomModel(event: FormEvent) {
@@ -742,24 +761,34 @@ export function App() {
             )}
             <div className="result-header">
               <h2>Results</h2>
-              <span>{results.length}</span>
+              <span>{resultCount}</span>
             </div>
             <div className="results">
-              {results.length === 0 && <div className="empty-results">No media yet</div>}
-              {results.map((result) => (
-                <article className="result-item" key={result.id}>
-                  {result.mimeType.startsWith('image/') && <img src={result.dataUrl} alt={result.name} />}
-                  {result.mimeType.startsWith('video/') && <video src={result.dataUrl} controls />}
-                  {result.mimeType.startsWith('audio/') && <audio src={result.dataUrl} controls />}
-                  <div className="result-meta">
-                    <strong>{result.name}</strong>
-                    <small>{result.filePath}</small>
-                    <a href={result.dataUrl} download={result.name}>
-                      <Download size={16} />
-                      Save
-                    </a>
+              {resultGroups.length === 0 && <div className="empty-results">No media yet</div>}
+              {resultGroups.map((group) => (
+                <section className="result-group" key={group.id}>
+                  <div className="result-group-header">
+                    <strong>{group.title}</strong>
+                    <span>{group.results.length}</span>
                   </div>
-                </article>
+                  <div className={classNames('result-group-grid', group.kind !== 'images' && 'single')}>
+                    {group.results.map((result) => (
+                      <article className="result-item" key={result.id}>
+                        {result.mimeType.startsWith('image/') && <img src={result.dataUrl} alt={result.name} />}
+                        {result.mimeType.startsWith('video/') && <video src={result.dataUrl} controls />}
+                        {result.mimeType.startsWith('audio/') && <audio src={result.dataUrl} controls />}
+                        <div className="result-meta">
+                          <strong>{result.name}</strong>
+                          <small>{result.filePath}</small>
+                          <a href={result.dataUrl} download={result.name}>
+                            <Download size={16} />
+                            Save
+                          </a>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
               ))}
             </div>
           </aside>
