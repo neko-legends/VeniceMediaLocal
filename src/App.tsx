@@ -414,6 +414,23 @@ export function App() {
     if (output) setResultGroups((existing) => [createResultGroup(output, 'Images'), ...existing])
   }
 
+  async function removeBackground() {
+    if (!sourceImage) {
+      setError('Choose a source image first')
+      setStatus('Needs attention')
+      return
+    }
+
+    const output = await runAction('Removing background', () =>
+      call<MediaResult>('remove_background', {
+        request: {
+          sourceImage,
+        },
+      }),
+    )
+    if (output) setResultGroups((existing) => [createResultGroup([output], 'Background Removed'), ...existing])
+  }
+
   async function deleteResultFiles(paths: string[], label: string) {
     const uniquePaths = Array.from(new Set(paths.filter(Boolean)))
     if (uniquePaths.length === 0) return
@@ -626,10 +643,16 @@ export function App() {
                 <ModelSelect label="Model" value={editModel} onChange={setEditModel} models={editModels} />
                 <SourcePicker source={sourceImage} onChange={loadSourceImage} />
                 <PromptArea value={prompt} onChange={setPrompt} />
-                <button className="primary-action" type="button" disabled>
-                  <Scissors size={18} />
-                  Edit Image
-                </button>
+                <div className="action-row">
+                  <button className="secondary-action" type="button" disabled>
+                    <Scissors size={18} />
+                    Edit Image
+                  </button>
+                  <button className="primary-action" type="button" onClick={removeBackground} disabled={loading || !sourceImage}>
+                    {loading ? <Loader2 className="spin" size={18} /> : <Eraser size={18} />}
+                    Remove Background
+                  </button>
+                </div>
               </form>
             )}
 

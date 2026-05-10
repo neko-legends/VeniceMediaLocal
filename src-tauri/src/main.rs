@@ -113,6 +113,12 @@ struct ImageGenerationRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct BackgroundRemoveRequest {
+    source_image: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct QueueMediaRequest {
     model: String,
     prompt: String,
@@ -928,6 +934,29 @@ fn decode_base64_payload(value: &str) -> Result<Vec<u8>, String> {
         .map_err(|err| format!("Failed to decode base64 media: {err}"))
 }
 
+fn image_input_body(source_image: &str) -> Result<Value, String> {
+    let trimmed = source_image.trim();
+    if trimmed.is_empty() {
+        return Err("Choose a source image first".to_string());
+    }
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Ok(json!({ "image_url": trimmed }));
+    }
+
+    let payload = trimmed
+        .split_once(',')
+        .map(|(_, right)| right)
+        .unwrap_or(trimmed)
+        .trim();
+
+    if payload.is_empty() {
+        return Err("Source image data is empty".to_string());
+    }
+
+    Ok(json!({ "image": payload }))
+}
+
 fn first_string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
     for key in keys {
         if let Some(found) = value.get(*key).and_then(Value::as_str) {
@@ -1122,6 +1151,23 @@ async fn generate_image(
     }
 
     Ok(results)
+}
+
+#[tauri::command]
+async fn remove_background(
+    app: AppHandle,
+    request: BackgroundRemoveRequest,
+) -> Result<MediaResult, String> {
+    let body = image_input_body(&request.source_image)?;
+    let response = venice_post_json("/image/background-remove", body.clone()).await?;
+    save_binary_response(
+        &app,
+        response,
+        "edits",
+        "background-removed",
+        json!({ "operation": "background-remove", "request": body }),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1447,6 +1493,7 @@ fn main() {
             delete_media_files,
             refresh_models,
             generate_image,
+            remove_background,
             queue_video,
             retrieve_video,
             queue_audio,

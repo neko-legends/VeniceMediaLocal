@@ -383,10 +383,21 @@ button {
   opacity: 0.62;
 }
 
+.secondary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .secondary-action {
   background: var(--surface-2);
   border-color: var(--border);
   color: var(--text);
+}
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .source-picker {
