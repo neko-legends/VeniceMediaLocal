@@ -531,13 +531,12 @@ function createResultGroup(results: MediaResult[], title: string): ResultGroup {
 function formatBuildVersion(version: string): string {
   const trimmed = version.trim()
   const match = trimmed.match(/^(\d{4})\.(\d{1,2})\.(\d{7,8})(?:\+(g[0-9a-f]+(?:\.dirty)?))?$/i)
-  if (!match) return trimmed ? `Build ${trimmed}` : 'Build dev'
+  if (!match) return trimmed ? `ver ${trimmed}` : 'ver dev'
 
   const [, year, month, patch, commit] = match
   const day = patch.slice(0, -6).padStart(2, '0')
-  const time = patch.slice(-6)
-  const builtAt = `${year}-${month.padStart(2, '0')}-${day} ${time.slice(0, 2)}:${time.slice(2, 4)}:${time.slice(4, 6)}`
-  return commit ? `${builtAt} · ${commit}` : builtAt
+  const builtDate = `${year}-${month.padStart(2, '0')}-${day}`
+  return commit ? `ver ${builtDate} · ${commit}` : `ver ${builtDate}`
 }
 
 function mixBurnSeed64(value: bigint): bigint {
@@ -1343,7 +1342,7 @@ export function App() {
             )
           })}
         </nav>
-        <div className="rail-build" title={`Build ${buildVersion || 'dev'}`}>
+        <div className="rail-build" title={formatBuildVersion(buildVersion)}>
           {formatBuildVersion(buildVersion)}
         </div>
       </aside>
