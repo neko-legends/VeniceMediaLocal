@@ -8,7 +8,21 @@ This app is intended to be shared with Venice community users as a local desktop
 
 Venice Media Local is a desktop media generator for people who want one local place to use Venice's media API.
 
-You install the app, paste in your own Venice API key, and generate media from your machine. The key stays on your computer in the operating system credential store. There is no shared server operated by this project.
+You build the app locally, paste in your own Venice API key, and generate media from your machine. The key stays on your computer in the operating system credential store. There is no shared server operated by this project.
+
+Security note:
+
+This repo does not provide a prebuilt `.exe` by default. That is intentional. For a local API-key app, the safer path is to build from source on your own machine instead of installing random binaries from the internet. If you are not a developer, ask your AI coding agent to install the prerequisites, inspect the repo, and build it locally for you.
+
+Plain-English build path:
+
+1. Install Node.js 20+ and Rust.
+2. Clone this repo.
+3. Run `npm install`.
+4. Run `.\Build-Windows.ps1`.
+5. Open the locally built app at `src-tauri\target\release\venice-media-local.exe`, or use the locally built installer in `src-tauri\target\release\bundle\nsis\`.
+6. Paste your Venice API key when the app asks for it.
+7. Choose a media type from the left side, refresh models if needed, and generate media.
 
 The goal is simple:
 
@@ -30,7 +44,7 @@ Why this can be nicer than using a hosted web UI:
 - **Model control.** Use **Get Latest From Venice** to refresh models, then add/remove models locally for your own workflow.
 - **Community modifiable.** Because this is an open local app, the community can add presets, batch tools, naming rules, galleries, export packs, prompt templates, or workflow shortcuts without waiting for the official UI.
 - **Themeable.** The included themes give the app a few polished dark and light looks.
-- **Installable.** It can be distributed as a normal Windows setup executable, with macOS/Linux builds possible through Tauri.
+- **Locally buildable.** It can produce a normal Windows setup executable from source, with macOS/Linux builds possible through Tauri.
 
 This is not meant to replace Venice. It is a local power-user workbench for Venice media generation.
 
@@ -44,6 +58,14 @@ If you are an AI coding agent helping a human with this repo:
 4. Build with Tauri before handing off an installer.
 5. Tell the human where the installer was produced.
 6. For release builds, commit first, then run the Windows build script so the generated version includes the release commit hash.
+
+Agent install/build handoff:
+
+1. Do not tell users to download a random `.exe`; this repo is source-first for security.
+2. If building locally on Windows, run `.\Build-Windows.ps1` from the repo root.
+3. After a successful build, the installer is in `src-tauri\target\release\bundle\nsis\`.
+4. The direct executable is in `src-tauri\target\release\`.
+5. Do not commit `dist/`, `src-tauri/target/`, `node_modules/`, `.env*`, or generated media.
 
 The Venice API key is stored through the OS credential store at runtime. It is not written into the repo. `VENICE_API_KEY` is supported as a developer fallback, but `.env*` files are ignored and must not be committed.
 
