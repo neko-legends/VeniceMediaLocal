@@ -914,6 +914,7 @@ export function App() {
     if (!moved) return
 
     const movedSet = new Set(moved)
+    setStatus(`Moved ${moved.length.toLocaleString()} file${moved.length === 1 ? '' : 's'} to the burn folder`)
     setResultGroups((existing) =>
       existing
         .map((group) => ({
@@ -929,7 +930,7 @@ export function App() {
     if (!stats) return
     if (stats.fileCount === 0) {
       setLastActionMs(null)
-      setStatus('Burn folder is empty')
+      setStatus('Burn folder is empty. Use a trash button to move generated files there first.')
       return
     }
 
@@ -1502,7 +1503,7 @@ export function App() {
                     <button className="icon-button compact" type="button" onClick={clearResults} title="Clear results">
                       <Eraser size={16} />
                     </button>
-                    <button className="icon-button compact danger" type="button" onClick={() => moveResultFilesToBurn(resultFilePaths, 'all result files')} title="Move all result files to burn folder">
+                    <button className="icon-button compact danger" type="button" onClick={() => moveResultFilesToBurn(resultFilePaths, 'all generated files')} title="Move all generated files to burn folder">
                       <Trash2 size={16} />
                     </button>
                   </>
@@ -1517,7 +1518,7 @@ export function App() {
                     <strong>{group.title}</strong>
                     <div className="result-actions">
                       <span>{group.results.length}</span>
-                      <button className="icon-button compact danger" type="button" onClick={() => moveResultFilesToBurn(group.results.map((result) => result.filePath), 'this result set')} title="Move result set to burn folder">
+                      <button className="icon-button compact danger" type="button" onClick={() => moveResultFilesToBurn(group.results.map((result) => result.filePath), 'this generated set')} title="Move generated set to burn folder">
                         <Trash2 size={14} />
                       </button>
                     </div>
@@ -1580,7 +1581,7 @@ function ResultCard({ result, onDelete, onEdit }: { result: MediaResult; onDelet
           )}
           <button className="link-button danger" type="button" onClick={onDelete}>
             <Trash2 size={14} />
-            Delete
+            Move to burn
           </button>
         </div>
       </div>

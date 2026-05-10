@@ -1077,6 +1077,21 @@ fn output_root(app: &AppHandle, settings: &AppSettings) -> Result<PathBuf, Strin
     Ok(PathBuf::from(default_output_dir(app)?))
 }
 
+fn ensure_output_folders_for_settings(
+    app: &AppHandle,
+    settings: &AppSettings,
+) -> Result<PathBuf, String> {
+    let root = output_root(app, settings)?;
+    fs::create_dir_all(&root).map_err(|err| err.to_string())?;
+    fs::create_dir_all(root.join("burn")).map_err(|err| err.to_string())?;
+    Ok(root)
+}
+
+fn ensure_output_folders(app: &AppHandle) -> Result<PathBuf, String> {
+    let settings = read_settings(app);
+    ensure_output_folders_for_settings(app, &settings)
+}
+
 fn metadata_number(metadata: &Value, key: &str) -> Option<u64> {
     metadata.get(key).and_then(|value| {
         value
@@ -1116,7 +1131,7 @@ fn save_media_bytes(
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S-%3f").to_string();
     let stem = safe_stem(prompt);
     let ext = extension_for_mime(mime_type);
-    let dir = output_root(app, &settings)?.join(kind);
+    let dir = ensure_output_folders_for_settings(app, &settings)?.join(kind);
     fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     let variant_suffix = metadata
         .get("variantIndex")
@@ -1157,10 +1172,15 @@ fn burn_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(output_root(app, &settings)?.join("burn"))
 }
 
+fn ensure_burn_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = burn_dir(app)?;
+    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    Ok(dir)
+}
+
 fn canonical_output_root(app: &AppHandle) -> Result<PathBuf, String> {
     let settings = read_settings(app);
-    let root = output_root(app, &settings)?;
-    fs::create_dir_all(&root).map_err(|err| err.to_string())?;
+    let root = ensure_output_folders_for_settings(app, &settings)?;
     root.canonicalize().map_err(|err| err.to_string())
 }
 
@@ -1203,8 +1223,7 @@ fn unique_burn_path(dir: &Path, original_name: &str, index: usize) -> PathBuf {
 #[tauri::command]
 fn move_media_files_to_burn(app: AppHandle, paths: Vec<String>) -> Result<Vec<String>, String> {
     let mut moved = Vec::new();
-    let burn_dir = burn_dir(&app)?;
-    fs::create_dir_all(&burn_dir).map_err(|err| err.to_string())?;
+    let burn_dir = ensure_burn_dir(&app)?;
 
     for (index, raw_path) in paths.into_iter().enumerate() {
         let trimmed = raw_path.trim().to_string();
@@ -1336,14 +1355,13 @@ fn corrupt_regular_file(path: &Path) -> Result<u64, String> {
 
 #[tauri::command]
 fn get_burn_folder_stats(app: AppHandle) -> Result<BurnFolderStats, String> {
-    let dir = burn_dir(&app)?;
+    let dir = ensure_burn_dir(&app)?;
     burn_folder_stats_for_dir(&dir)
 }
 
 #[tauri::command]
 fn burn_folder(app: AppHandle) -> Result<BurnFolderStats, String> {
-    let dir = burn_dir(&app)?;
-    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    let dir = ensure_burn_dir(&app)?;
 
     let mut files = Vec::new();
     let mut dirs = Vec::new();
@@ -1482,8 +1500,11 @@ async fn save_binary_response(
 
 #[tauri::command]
 fn get_app_state(app: AppHandle) -> Result<AppState, String> {
+    let settings = read_settings(&app);
+    ensure_output_folders_for_settings(&app, &settings)?;
+
     Ok(AppState {
-        settings: read_settings(&app),
+        settings,
         key_configured: has_api_key(),
         models: read_model_cache(&app),
     })
@@ -1498,6 +1519,7 @@ fn save_settings(app: AppHandle, request: SaveSettingsRequest) -> Result<AppSett
     if let Some(output_dir) = request.output_dir {
         settings.output_dir = output_dir.trim().to_string();
     }
+    ensure_output_folders_for_settings(&app, &settings)?;
     save_settings_file(&app, &settings)?;
     Ok(settings)
 }
@@ -2050,6 +2072,12 @@ async fn generate_speech(app: AppHandle, request: SpeechRequest) -> Result<Media
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            if let Err(err) = ensure_output_folders(app.handle()) {
+                eprintln!("Failed to initialize output folders: {err}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_app_state,
             save_settings,
