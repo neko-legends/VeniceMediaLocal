@@ -21,7 +21,7 @@ import {
   Wand2,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, MouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { ChangeEvent, ClipboardEvent, DragEvent, FocusEvent, FormEvent, MouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 
 type ModeId = 'image' | 'edit' | 'video' | 'music' | 'sfx' | 'voice' | 'transcribe' | 'models' | 'settings'
 type ModelKind = 'image' | 'edit' | 'video' | 'music' | 'sfx' | 'voice' | 'transcribe'
@@ -432,6 +432,22 @@ function clipboardFile(items: DataTransferItemList): File | null {
   return null
 }
 
+function tooltipElement(target: EventTarget | null): HTMLElement | null {
+  return target instanceof HTMLElement ? target.closest<HTMLElement>('[data-tooltip], [title], [aria-label]') : null
+}
+
+function tooltipText(element: HTMLElement): string {
+  const text = element.dataset.tooltip || element.getAttribute('title') || element.getAttribute('aria-label') || ''
+  if (element.hasAttribute('title')) {
+    element.dataset.tooltip = text
+    if (!element.hasAttribute('aria-label')) {
+      element.setAttribute('aria-label', text)
+    }
+    element.removeAttribute('title')
+  }
+  return text.trim()
+}
+
 function classNames(...items: Array<string | false | null | undefined>): string {
   return items.filter(Boolean).join(' ')
 }
@@ -454,6 +470,7 @@ export function App() {
   const [apiKey, setApiKey] = useState('')
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
+  const [tooltip, setTooltip] = useState('')
   const [loading, setLoading] = useState(false)
   const [actionStartedAt, setActionStartedAt] = useState<number | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
@@ -977,6 +994,24 @@ export function App() {
     setLastActionMs(null)
   }
 
+  function showTooltipFromTarget(target: EventTarget | null) {
+    const element = tooltipElement(target)
+    const text = element ? tooltipText(element) : ''
+    if (text) setTooltip(text)
+  }
+
+  function handleTooltipOut(event: MouseEvent<HTMLDivElement>) {
+    const element = tooltipElement(event.target)
+    const related = event.relatedTarget instanceof HTMLElement ? event.relatedTarget : null
+    if (element && related && element.contains(related)) return
+    if (!related || !tooltipElement(related)) setTooltip('')
+  }
+
+  function handleTooltipBlur(event: FocusEvent<HTMLDivElement>) {
+    const related = event.relatedTarget instanceof HTMLElement ? event.relatedTarget : null
+    if (!related || !tooltipElement(related)) setTooltip('')
+  }
+
   function queueVideo(event: FormEvent) {
     event.preventDefault()
     const request = {
@@ -1100,7 +1135,13 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      onMouseOver={(event) => showTooltipFromTarget(event.target)}
+      onMouseOut={handleTooltipOut}
+      onFocus={(event) => showTooltipFromTarget(event.target)}
+      onBlur={handleTooltipBlur}
+    >
       <aside className="rail">
         <nav className="mode-nav">
           {modes.map((item) => {
@@ -1138,15 +1179,16 @@ export function App() {
         </header>
 
         {error && <div className="notice error">{error}</div>}
-        {status && (
+        {(status || tooltip) && (
           <div className="notice">
             {loading || hasRunningJobs ? <Loader2 className="spin" size={16} /> : null}
-            <span className="notice-message">{status}</span>
+            <span className="notice-message">{status || 'Ready'}</span>
             {(runningJobCount > 0 || queuedJobCount > 0) && (
               <span className="elapsed-pill">{runningJobCount} running · {queuedJobCount} queued</span>
             )}
             {activeElapsedLabel && <span className="elapsed-pill">{activeElapsedLabel}</span>}
             {completedElapsedLabel && <span className="elapsed-pill">{completedElapsedLabel}</span>}
+            {tooltip && <span className="tooltip-hint">{tooltip}</span>}
           </div>
         )}
 

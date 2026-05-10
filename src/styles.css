@@ -299,6 +299,20 @@ button {
   white-space: nowrap;
 }
 
+.tooltip-hint {
+  min-width: 0;
+  max-width: min(420px, 42vw);
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .notice.error {
   background: color-mix(in srgb, var(--surface-2) 78%, var(--danger) 16%);
   color: var(--text);
