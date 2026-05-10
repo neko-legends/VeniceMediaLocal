@@ -494,6 +494,65 @@ button {
   right: 8px;
 }
 
+.transcribe-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.transcribe-dropzone {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  border: 1px dashed color-mix(in srgb, var(--border) 65%, var(--accent));
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.transcribe-dropzone.dragging {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--surface) 82%, var(--accent) 18%);
+}
+
+.transcribe-dropzone input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.transcribe-empty,
+.transcribe-file-card {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  max-width: min(420px, 92%);
+  text-align: center;
+}
+
+.transcribe-empty {
+  color: var(--muted);
+}
+
+.transcribe-empty small,
+.transcribe-file-card small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.transcribe-file-card {
+  width: min(440px, 92%);
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.transcribe-file-card strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .result-panel {
   display: flex;
   flex-direction: column;
@@ -645,6 +704,20 @@ button {
 
 .result-item audio {
   width: 100%;
+}
+
+.transcript-preview {
+  max-height: 360px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .result-meta {

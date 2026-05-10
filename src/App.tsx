@@ -4,6 +4,7 @@ import {
   Database,
   Download,
   Eraser,
+  FileText,
   FolderOpen,
   Image as ImageIcon,
   KeyRound,
@@ -22,8 +23,8 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { ChangeEvent, DragEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from 'react'
 
-type ModeId = 'image' | 'edit' | 'video' | 'music' | 'sfx' | 'voice' | 'models' | 'settings'
-type ModelKind = 'image' | 'edit' | 'video' | 'music' | 'sfx' | 'voice'
+type ModeId = 'image' | 'edit' | 'video' | 'music' | 'sfx' | 'voice' | 'transcribe' | 'models' | 'settings'
+type ModelKind = 'image' | 'edit' | 'video' | 'music' | 'sfx' | 'voice' | 'transcribe'
 type ThemeId = 'eva-dark' | 'pearl-white' | 'abyss-teal' | 'ember' | 'mosswood' | 'rose-noir'
 
 type ModelRecord = {
@@ -43,6 +44,7 @@ type ModelCache = {
   musicModels: ModelRecord[]
   sfxModels: ModelRecord[]
   voiceModels: ModelRecord[]
+  transcribeModels: ModelRecord[]
 }
 
 type AppSettings = {
@@ -63,6 +65,7 @@ type MediaResult = {
   mimeType: string
   dataUrl: string
   filePath: string
+  text?: string
   metadata?: unknown
 }
 
@@ -102,6 +105,7 @@ const VIDEO_ASPECT_OPTIONS = ['16:9', '9:16', '1:1']
 const VOICE_OPTIONS = ['am_eric', 'af_bella', 'af_nova']
 const EMPTY_OPTIONS: string[] = []
 const MAX_IMAGE_SEED = 999_999_999
+const TRANSCRIBE_FILE_ACCEPT = 'audio/*,video/*,.mp3,.m4a,.wav,.webm,.flac,.ogg,.aac,.mp4,.mpeg'
 
 const fallbackModels: ModelCache = {
   lastFetched: '',
@@ -129,10 +133,26 @@ const fallbackModels: ModelCache = {
     baseModel('tts-chatterbox-hd', 'Chatterbox HD', 'voice'),
     baseModel('tts-xai-v1', 'xAI TTS', 'voice'),
   ],
+  transcribeModels: [
+    baseModel('fal-ai/wizper', 'fal.ai Wizper', 'transcribe', transcribeControls(true, true)),
+    baseModel('nvidia/parakeet-tdt-0.6b-v3', 'NVIDIA Parakeet TDT 0.6B v3', 'transcribe', transcribeControls(false, true)),
+    baseModel('openai/whisper-large-v3', 'Whisper Large v3', 'transcribe', transcribeControls(true, true)),
+    baseModel('stt-xai-v1', 'xAI STT v1', 'transcribe', transcribeControls(true, true)),
+    baseModel('elevenlabs/scribe-v2', 'ElevenLabs Scribe v2', 'transcribe', transcribeControls(true, true)),
+  ],
 }
 
 function baseModel(id: string, name: string, kind: ModelKind, controls: Record<string, unknown> = {}): ModelRecord {
   return { id, name, kind, modes: [kind], controls }
+}
+
+function transcribeControls(supportsLanguage: boolean, supportsTimestamps: boolean): Record<string, unknown> {
+  return {
+    supportsLanguage,
+    supportsTimestamps,
+    responseFormats: ['json', 'text'],
+    defaultResponseFormat: 'json',
+  }
 }
 
 const modes = [
@@ -142,6 +162,7 @@ const modes = [
   { id: 'music', label: 'Music', icon: Music, kind: 'music' },
   { id: 'sfx', label: 'SFX', icon: Volume2, kind: 'sfx' },
   { id: 'voice', label: 'Voice', icon: Mic2, kind: 'voice' },
+  { id: 'transcribe', label: 'Speech -> Text', icon: FileText, kind: 'transcribe' },
   { id: 'models', label: 'Models', icon: Database },
   { id: 'settings', label: 'Settings', icon: Settings },
 ] as const
@@ -164,6 +185,7 @@ const kindToCacheKey: Record<ModelKind, ModelCacheListKey> = {
   music: 'musicModels',
   sfx: 'sfxModels',
   voice: 'voiceModels',
+  transcribe: 'transcribeModels',
 }
 
 function isTauriRuntime(): boolean {
@@ -228,6 +250,22 @@ function controlArray(model: ModelRecord | undefined, key: string, fallback: str
     : fallback
 }
 
+function controlBool(model: ModelRecord | undefined, key: string, fallback: boolean): boolean {
+  const value = model?.controls?.[key]
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return ''
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024)).toLocaleString()} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function isTranscribableFile(file: File): boolean {
+  if (file.type.startsWith('audio/') || file.type.startsWith('video/')) return true
+  return /\.(mp3|m4a|wav|webm|flac|ogg|aac|mp4|mpeg)$/i.test(file.name)
+}
+
 function classNames(...items: Array<string | false | null | undefined>): string {
   return items.filter(Boolean).join(' ')
 }
@@ -262,6 +300,7 @@ export function App() {
   const musicModels = useMemo(() => modelList(models, overrides, 'music'), [models, overrides])
   const sfxModels = useMemo(() => modelList(models, overrides, 'sfx'), [models, overrides])
   const voiceModels = useMemo(() => modelList(models, overrides, 'voice'), [models, overrides])
+  const transcribeModels = useMemo(() => modelList(models, overrides, 'transcribe'), [models, overrides])
 
   const [imageModel, setImageModel] = useState('')
   const [editModel, setEditModel] = useState('')
@@ -269,6 +308,7 @@ export function App() {
   const [musicModel, setMusicModel] = useState('')
   const [sfxModel, setSfxModel] = useState('')
   const [voiceModel, setVoiceModel] = useState('')
+  const [transcribeModel, setTranscribeModel] = useState('')
 
   const [prompt, setPrompt] = useState('')
   const [negativePrompt, setNegativePrompt] = useState('')
@@ -300,6 +340,14 @@ export function App() {
   const [voiceFormat, setVoiceFormat] = useState('mp3')
   const [voiceStyle, setVoiceStyle] = useState('')
 
+  const [transcribeAudio, setTranscribeAudio] = useState('')
+  const [transcribeFileName, setTranscribeFileName] = useState('')
+  const [transcribeMimeType, setTranscribeMimeType] = useState('')
+  const [transcribeFileSize, setTranscribeFileSize] = useState(0)
+  const [transcribeLanguage, setTranscribeLanguage] = useState('')
+  const [transcribeResponseFormat, setTranscribeResponseFormat] = useState('json')
+  const [transcribeTimestamps, setTranscribeTimestamps] = useState(false)
+
   const [managerKind, setManagerKind] = useState<ModelKind>('image')
   const [customModelId, setCustomModelId] = useState('')
   const [customModelName, setCustomModelName] = useState('')
@@ -327,7 +375,8 @@ export function App() {
     if (!musicModel && musicModels.length > 0) setMusicModel(firstModelId(musicModels))
     if (!sfxModel && sfxModels.length > 0) setSfxModel(firstModelId(sfxModels))
     if (!voiceModel && voiceModels.length > 0) setVoiceModel(firstModelId(voiceModels))
-  }, [editModel, editModels, imageModel, imageModels, musicModel, musicModels, sfxModel, sfxModels, videoModel, videoModels, voiceModel, voiceModels])
+    if (!transcribeModel && transcribeModels.length > 0) setTranscribeModel(firstModelId(transcribeModels))
+  }, [editModel, editModels, imageModel, imageModels, musicModel, musicModels, sfxModel, sfxModels, transcribeModel, transcribeModels, videoModel, videoModels, voiceModel, voiceModels])
 
   useEffect(() => {
     if (!queue) return
@@ -342,6 +391,7 @@ export function App() {
   const currentImageModel = imageModels.find((model) => model.id === imageModel)
   const currentVideoModel = videoModels.find((model) => model.id === videoModel)
   const currentVoiceModel = voiceModels.find((model) => model.id === voiceModel)
+  const currentTranscribeModel = transcribeModels.find((model) => model.id === transcribeModel)
   const imageRatios = controlArray(currentImageModel, 'sizeOptions', IMAGE_ASPECT_OPTIONS)
   const imageResolutions = controlArray(currentImageModel, 'resolutionOptions', EMPTY_OPTIONS)
   const selectedAspectRatio = imageRatios.includes(aspectRatio) ? aspectRatio : imageRatios[0] ?? '1:1'
@@ -350,6 +400,10 @@ export function App() {
   const videoResolutions = controlArray(currentVideoModel, 'resolutionOptions', VIDEO_RESOLUTION_OPTIONS)
   const videoRatios = controlArray(currentVideoModel, 'aspectRatioOptions', VIDEO_ASPECT_OPTIONS)
   const voiceOptions = controlArray(currentVoiceModel, 'voices', VOICE_OPTIONS)
+  const transcribeResponseFormats = controlArray(currentTranscribeModel, 'responseFormats', ['json', 'text'])
+  const supportsTranscribeLanguage = controlBool(currentTranscribeModel, 'supportsLanguage', true)
+  const supportsTranscribeTimestamps = controlBool(currentTranscribeModel, 'supportsTimestamps', true)
+  const selectedTranscribeResponseFormat = transcribeResponseFormats.includes(transcribeResponseFormat) ? transcribeResponseFormat : transcribeResponseFormats[0] ?? 'json'
   const resultCount = resultGroups.reduce((total, group) => total + group.results.length, 0)
   const resultFilePaths = resultGroups.flatMap((group) => group.results.map((result) => result.filePath))
   const hasEditSource = editSourceImages.some(Boolean)
@@ -509,6 +563,21 @@ export function App() {
     setSourceImage(dataUrl)
   }
 
+  async function loadTranscribeFile(file: File) {
+    const dataUrl = await fileToDataUrl(file)
+    setTranscribeAudio(dataUrl)
+    setTranscribeFileName(file.name || 'audio')
+    setTranscribeMimeType(file.type || 'application/octet-stream')
+    setTranscribeFileSize(file.size || 0)
+  }
+
+  function clearTranscribeFile() {
+    setTranscribeAudio('')
+    setTranscribeFileName('')
+    setTranscribeMimeType('')
+    setTranscribeFileSize(0)
+  }
+
   async function loadEditSourceImage(index: number, file: File) {
     const dataUrl = await fileToDataUrl(file)
     setEditSourceImages((existing) => existing.map((source, sourceIndex) => (sourceIndex === index ? dataUrl : source)))
@@ -590,6 +659,30 @@ export function App() {
       }),
     )
     if (output) setResultGroups((existing) => [createResultGroup([output], 'Voice'), ...existing])
+  }
+
+  async function transcribeSpeech(event: FormEvent) {
+    event.preventDefault()
+    if (!transcribeAudio) {
+      setError('Choose an audio or video file to transcribe')
+      setStatus('Needs attention')
+      return
+    }
+
+    const output = await runAction('Transcribing speech', () =>
+      call<MediaResult>('transcribe_audio', {
+        request: {
+          model: transcribeModel,
+          audio: transcribeAudio,
+          fileName: transcribeFileName || 'audio',
+          mimeType: transcribeMimeType,
+          responseFormat: selectedTranscribeResponseFormat,
+          timestamps: supportsTranscribeTimestamps ? transcribeTimestamps : false,
+          language: supportsTranscribeLanguage ? transcribeLanguage : '',
+        },
+      }),
+    )
+    if (output) setResultGroups((existing) => [createResultGroup([output], 'Speech -> Text'), ...existing])
   }
 
   function addCustomModel(event: FormEvent) {
@@ -823,6 +916,32 @@ export function App() {
               </form>
             )}
 
+            {mode === 'transcribe' && (
+              <form onSubmit={transcribeSpeech} className="tool-form">
+                <ModelSelect label="Model" value={transcribeModel} onChange={setTranscribeModel} models={transcribeModels} />
+                <TranscribeFilePicker
+                  fileName={transcribeFileName}
+                  mimeType={transcribeMimeType}
+                  fileSize={transcribeFileSize}
+                  onFile={loadTranscribeFile}
+                  onClear={clearTranscribeFile}
+                />
+                <div className="control-grid">
+                  <SelectField label="Format" value={selectedTranscribeResponseFormat} onChange={setTranscribeResponseFormat} options={transcribeResponseFormats} />
+                  {supportsTranscribeLanguage && (
+                    <TextField label="Language" value={transcribeLanguage} onChange={setTranscribeLanguage} />
+                  )}
+                </div>
+                {supportsTranscribeTimestamps && (
+                  <label className="toggle-row">
+                    <input type="checkbox" checked={transcribeTimestamps} onChange={(event) => setTranscribeTimestamps(event.target.checked)} />
+                    <span>Include timestamps</span>
+                  </label>
+                )}
+                <SubmitButton loading={loading} icon={FileText}>Transcribe</SubmitButton>
+              </form>
+            )}
+
             {mode === 'models' && (
               <div className="tool-form">
                 <div className="inline-header">
@@ -833,7 +952,7 @@ export function App() {
                   </button>
                 </div>
                 <form className="model-add" onSubmit={addCustomModel}>
-                  <SelectField label="Type" value={managerKind} onChange={(value) => setManagerKind(value as ModelKind)} options={['image', 'edit', 'video', 'music', 'sfx', 'voice']} />
+                  <SelectField label="Type" value={managerKind} onChange={(value) => setManagerKind(value as ModelKind)} options={['image', 'edit', 'video', 'music', 'sfx', 'voice', 'transcribe']} />
                   <TextField label="Model ID" value={customModelId} onChange={setCustomModelId} />
                   <TextField label="Name" value={customModelName} onChange={setCustomModelName} />
                   <button className="icon-button add-button" type="submit" title="Add model">
@@ -949,6 +1068,7 @@ export function App() {
                         {result.mimeType.startsWith('image/') && <img src={result.dataUrl} alt={result.name} />}
                         {result.mimeType.startsWith('video/') && <video src={result.dataUrl} controls />}
                         {result.mimeType.startsWith('audio/') && <audio src={result.dataUrl} controls />}
+                        {result.mimeType.startsWith('text/') && <pre className="transcript-preview">{result.text}</pre>}
                         <div className="result-meta">
                           <strong>{result.name}</strong>
                           <small>{result.filePath}</small>
@@ -1076,6 +1196,74 @@ function TextField({
       <span>{label}</span>
       <input value={value} onChange={(event) => onChange(event.target.value)} />
     </label>
+  )
+}
+
+function TranscribeFilePicker({
+  fileName,
+  mimeType,
+  fileSize,
+  onFile,
+  onClear,
+}: {
+  fileName: string
+  mimeType: string
+  fileSize: number
+  onFile: (file: File) => void | Promise<void>
+  onClear: () => void
+}) {
+  const [dragging, setDragging] = useState(false)
+
+  function chooseFile(file: File | undefined) {
+    if (!file || !isTranscribableFile(file)) return
+    void onFile(file)
+  }
+
+  function handleInput(event: ChangeEvent<HTMLInputElement>) {
+    chooseFile(event.target.files?.[0])
+    event.currentTarget.value = ''
+  }
+
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault()
+    setDragging(false)
+    chooseFile(Array.from(event.dataTransfer.files).find(isTranscribableFile))
+  }
+
+  const sizeLabel = formatFileSize(fileSize)
+
+  return (
+    <div className="transcribe-picker">
+      <label
+        className={classNames('transcribe-dropzone', dragging && 'dragging')}
+        onDragEnter={(event) => {
+          event.preventDefault()
+          setDragging(true)
+        }}
+        onDragOver={(event) => event.preventDefault()}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+      >
+        <input type="file" accept={TRANSCRIBE_FILE_ACCEPT} onChange={handleInput} />
+        {fileName ? (
+          <span className="transcribe-file-card">
+            <strong>{fileName}</strong>
+            <small>{[sizeLabel, mimeType].filter(Boolean).join(' · ')}</small>
+          </span>
+        ) : (
+          <span className="transcribe-empty">
+            <FileText size={24} />
+            <strong>Audio / Video File</strong>
+            <small>Drop or browse mp3, m4a, wav, webm, flac, ogg, aac, mp4, mpeg</small>
+          </span>
+        )}
+      </label>
+      {fileName && (
+        <button className="secondary-action" type="button" onClick={onClear}>
+          Clear File
+        </button>
+      )}
+    </div>
   )
 }
 

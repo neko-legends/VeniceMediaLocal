@@ -77,6 +77,8 @@ struct ModelCache {
     music_models: Vec<ModelRecord>,
     sfx_models: Vec<ModelRecord>,
     voice_models: Vec<ModelRecord>,
+    #[serde(default)]
+    transcribe_models: Vec<ModelRecord>,
 }
 
 #[derive(Debug, Serialize)]
@@ -157,6 +159,18 @@ struct SpeechRequest {
     top_p: Option<f32>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscriptionRequest {
+    model: String,
+    audio: String,
+    file_name: Option<String>,
+    mime_type: Option<String>,
+    response_format: Option<String>,
+    timestamps: Option<bool>,
+    language: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MediaResult {
@@ -167,6 +181,8 @@ struct MediaResult {
     data_url: String,
     file_path: String,
     metadata: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -386,6 +402,43 @@ fn fallback_model_cache() -> ModelCache {
                 voice_controls(Value::Array(vec![])),
             ),
         ],
+        transcribe_models: vec![
+            model(
+                "fal-ai/wizper",
+                "fal.ai Wizper",
+                "transcribe",
+                "transcribe-audio",
+                transcribe_controls(true, true),
+            ),
+            model(
+                "nvidia/parakeet-tdt-0.6b-v3",
+                "NVIDIA Parakeet TDT 0.6B v3",
+                "transcribe",
+                "transcribe-audio",
+                transcribe_controls(false, true),
+            ),
+            model(
+                "openai/whisper-large-v3",
+                "Whisper Large v3",
+                "transcribe",
+                "transcribe-audio",
+                transcribe_controls(true, true),
+            ),
+            model(
+                "stt-xai-v1",
+                "xAI STT v1",
+                "transcribe",
+                "transcribe-audio",
+                transcribe_controls(true, true),
+            ),
+            model(
+                "elevenlabs/scribe-v2",
+                "ElevenLabs Scribe v2",
+                "transcribe",
+                "transcribe-audio",
+                transcribe_controls(true, true),
+            ),
+        ],
     }
 }
 
@@ -418,6 +471,9 @@ fn apply_model_fallbacks(cache: &mut ModelCache) {
     }
     if cache.voice_models.is_empty() {
         cache.voice_models = fallback.voice_models;
+    }
+    if cache.transcribe_models.is_empty() {
+        cache.transcribe_models = fallback.transcribe_models;
     }
 
     for model in &mut cache.image_models {
@@ -477,6 +533,15 @@ fn voice_controls(voices: Value) -> Value {
         "supportsResponseFormat": true,
         "responseFormats": ["mp3", "opus", "aac", "flac", "wav", "pcm"],
         "voices": voices
+    })
+}
+
+fn transcribe_controls(supports_language: bool, supports_timestamps: bool) -> Value {
+    json!({
+        "supportsLanguage": supports_language,
+        "supportsTimestamps": supports_timestamps,
+        "responseFormats": ["json", "text"],
+        "defaultResponseFormat": "json"
     })
 }
 
@@ -834,6 +899,24 @@ fn normalize_model(entry: Value, model_type: &str) -> Option<ModelRecord> {
                 raw: entry,
             })
         }
+        "asr" => {
+            let supports_language = haystack.contains("whisper")
+                || haystack.contains("scribe")
+                || haystack.contains("wizper")
+                || haystack.contains("xai");
+            let supports_timestamps = constraints
+                .get("supports_timestamps")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            Some(ModelRecord {
+                id,
+                name,
+                kind: "transcribe".to_string(),
+                modes: vec!["transcribe-audio".to_string()],
+                controls: transcribe_controls(supports_language, supports_timestamps),
+                raw: entry,
+            })
+        }
         _ => None,
     }
 }
@@ -853,6 +936,7 @@ async fn refresh_models_inner(app: &AppHandle) -> Result<ModelCache, String> {
     let video_entries = fetch_model_type("video").await?;
     let music_entries = fetch_model_type("music").await?;
     let tts_entries = fetch_model_type("tts").await?;
+    let asr_entries = fetch_model_type("asr").await?;
 
     let mut seen = HashSet::new();
     let mut push_unique = |records: Vec<ModelRecord>| -> Vec<ModelRecord> {
@@ -882,6 +966,12 @@ async fn refresh_models_inner(app: &AppHandle) -> Result<ModelCache, String> {
             .filter_map(|entry| normalize_model(entry, "tts"))
             .collect(),
     );
+    let transcribe_models = push_unique(
+        asr_entries
+            .into_iter()
+            .filter_map(|entry| normalize_model(entry, "asr"))
+            .collect(),
+    );
 
     let mut cache = ModelCache {
         last_fetched: Utc::now().to_rfc3339(),
@@ -907,6 +997,7 @@ async fn refresh_models_inner(app: &AppHandle) -> Result<ModelCache, String> {
             .cloned()
             .collect(),
         voice_models,
+        transcribe_models,
     };
 
     apply_model_fallbacks(&mut cache);
@@ -945,6 +1036,7 @@ fn extension_for_mime(mime: &str) -> &'static str {
         "audio/flac" => "flac",
         "audio/opus" => "opus",
         "audio/aac" => "aac",
+        "text/plain" => "txt",
         _ if mime.starts_with("audio/") => "mp3",
         _ => "bin",
     }
@@ -1006,7 +1098,20 @@ fn save_media_bytes(
         data_url: format!("data:{mime_type};base64,{encoded}"),
         file_path: path.to_string_lossy().to_string(),
         metadata,
+        text: None,
     })
+}
+
+fn save_text_result(
+    app: &AppHandle,
+    kind: &str,
+    prompt: &str,
+    text: &str,
+    metadata: Value,
+) -> Result<MediaResult, String> {
+    let mut result = save_media_bytes(app, kind, prompt, "text/plain", text.as_bytes(), metadata)?;
+    result.text = Some(text.to_string());
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1067,6 +1172,30 @@ fn image_input_body(source_image: &str) -> Result<Value, String> {
     }
 
     Ok(json!({ "image": payload }))
+}
+
+fn decode_data_url(value: &str) -> Result<(Vec<u8>, String), String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("Choose a file first".to_string());
+    }
+
+    let (mime, payload) = if let Some((left, right)) = trimmed.split_once(',') {
+        let mime = left
+            .strip_prefix("data:")
+            .and_then(|header| header.split(';').next())
+            .unwrap_or("application/octet-stream")
+            .trim()
+            .to_string();
+        (mime, right.trim())
+    } else {
+        ("application/octet-stream".to_string(), trimmed)
+    };
+
+    let bytes = general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|err| format!("Failed to decode file data: {err}"))?;
+    Ok((bytes, mime))
 }
 
 fn first_string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
@@ -1523,6 +1652,93 @@ async fn retrieve_queued_media(
 }
 
 #[tauri::command]
+async fn transcribe_audio(
+    app: AppHandle,
+    request: TranscriptionRequest,
+) -> Result<MediaResult, String> {
+    let key = read_api_key().map_err(|_| "Venice API key is not configured".to_string())?;
+    let (bytes, detected_mime) = decode_data_url(&request.audio)?;
+    let file_name = request
+        .file_name
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "audio".to_string());
+    let mime = request
+        .mime_type
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(detected_mime);
+
+    let file_part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(file_name.clone())
+        .mime_str(&mime)
+        .map_err(|err| err.to_string())?;
+    let mut form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("model", request.model.clone());
+
+    let response_format = request
+        .response_format
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "json".to_string());
+    form = form.text("response_format", response_format.clone());
+
+    if request.timestamps.unwrap_or(false) {
+        form = form.text("timestamps", "true".to_string());
+    }
+    if let Some(language) = request.language.filter(|value| !value.trim().is_empty()) {
+        form = form.text("language", language);
+    }
+
+    let response = client()
+        .post(format!("{VENICE_BASE_URL}/audio/transcriptions"))
+        .bearer_auth(key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|err| err.to_string())?;
+    let response = ensure_success(response).await?;
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let (text, raw) = if content_type.contains("json") {
+        let payload: Value = response.json().await.map_err(|err| err.to_string())?;
+        let text = first_string_field(&payload, &["text", "transcript"])
+            .unwrap_or("")
+            .to_string();
+        (text, payload)
+    } else {
+        let text = response.text().await.map_err(|err| err.to_string())?;
+        (text.trim().to_string(), json!({ "text": text }))
+    };
+
+    if text.trim().is_empty() {
+        return Err(format!(
+            "Venice transcription response did not include transcript text: {raw}"
+        ));
+    }
+
+    save_text_result(
+        &app,
+        "transcripts",
+        &file_name,
+        &text,
+        json!({
+            "model": request.model,
+            "fileName": file_name,
+            "mimeType": mime,
+            "responseFormat": response_format,
+            "raw": raw
+        }),
+    )
+}
+
+#[tauri::command]
 async fn generate_speech(app: AppHandle, request: SpeechRequest) -> Result<MediaResult, String> {
     let response_format = request
         .response_format
@@ -1611,6 +1827,7 @@ fn main() {
             queue_audio,
             retrieve_audio,
             generate_speech,
+            transcribe_audio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Venice Media Local");
