@@ -60,6 +60,10 @@ Why this can be nicer than using a hosted web UI:
 
 This is not meant to replace Venice. It is a local power-user workbench for Venice media generation.
 
+## License
+
+Venice Media Local is released under the MIT License. You can use, copy, modify, fork, upgrade, publish, and redistribute it, including modified versions, as long as the MIT copyright and license notice stay with the software.
+
 ## For AI Agents
 
 If you are an AI coding agent helping a human with this repo:
