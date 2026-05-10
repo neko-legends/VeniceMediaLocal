@@ -101,6 +101,7 @@ const VIDEO_RESOLUTION_OPTIONS = ['480p', '720p', '1080p']
 const VIDEO_ASPECT_OPTIONS = ['16:9', '9:16', '1:1']
 const VOICE_OPTIONS = ['am_eric', 'af_bella', 'af_nova']
 const EMPTY_OPTIONS: string[] = []
+const MAX_IMAGE_SEED = 999_999_999
 
 const fallbackModels: ModelCache = {
   lastFetched: '',
@@ -278,6 +279,8 @@ export function App() {
   const [steps, setSteps] = useState(28)
   const [cfgScale, setCfgScale] = useState(7.5)
   const [seed, setSeed] = useState('')
+  const [lockSeed, setLockSeed] = useState(false)
+  const [randomSeed, setRandomSeed] = useState(false)
   const [hideWatermark, setHideWatermark] = useState(true)
 
   const [sourceImage, setSourceImage] = useState('')
@@ -408,6 +411,36 @@ export function App() {
     }
   }
 
+  function randomImageSeed(): number {
+    return Math.floor(Math.random() * (MAX_IMAGE_SEED + 1))
+  }
+
+  function seedForImageRequest(): number | null {
+    const trimmed = seed.trim()
+    if (randomSeed || (lockSeed && !trimmed)) {
+      const nextSeed = randomImageSeed()
+      setSeed(String(nextSeed))
+      return nextSeed
+    }
+
+    if (!trimmed) return null
+
+    const parsed = Number(trimmed)
+    if (!Number.isFinite(parsed)) {
+      throw new Error('Seed must be a number')
+    }
+
+    const normalized = Math.trunc(parsed)
+    if (normalized < 0 || normalized > MAX_IMAGE_SEED) {
+      throw new Error(`Seed must be between 0 and ${MAX_IMAGE_SEED}`)
+    }
+
+    if (String(normalized) !== trimmed) {
+      setSeed(String(normalized))
+    }
+    return normalized
+  }
+
   async function generateImage(event: FormEvent) {
     event.preventDefault()
     const output = await runAction('Generating image', () =>
@@ -421,7 +454,7 @@ export function App() {
           variants,
           steps,
           cfgScale,
-          seed: seed ? Number(seed) : null,
+          seed: seedForImageRequest(),
           hideWatermark,
           format: imageFormat,
         },
@@ -666,6 +699,28 @@ export function App() {
                 <label className="toggle-row">
                   <input type="checkbox" checked={hideWatermark} onChange={(event) => setHideWatermark(event.target.checked)} />
                   <span>Hide watermark</span>
+                </label>
+                <label className="toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={lockSeed}
+                    onChange={(event) => {
+                      setLockSeed(event.target.checked)
+                      if (event.target.checked) setRandomSeed(false)
+                    }}
+                  />
+                  <span>Lock seed</span>
+                </label>
+                <label className="toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={randomSeed}
+                    onChange={(event) => {
+                      setRandomSeed(event.target.checked)
+                      if (event.target.checked) setLockSeed(false)
+                    }}
+                  />
+                  <span>Random seed</span>
                 </label>
                 <SubmitButton loading={loading} icon={Wand2}>Generate Image</SubmitButton>
               </form>
