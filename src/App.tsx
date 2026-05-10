@@ -12,7 +12,6 @@ import {
   Save,
   Scissors,
   Settings,
-  Sparkles,
   Trash2,
   Video,
   Volume2,
@@ -502,10 +501,6 @@ export function App() {
   return (
     <div className="app-shell">
       <aside className="rail">
-        <div className="brand">
-          <Sparkles size={22} />
-          <span>Venice Media</span>
-        </div>
         <nav className="mode-nav">
           {modes.map((item) => {
             const Icon = item.icon

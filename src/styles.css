@@ -144,21 +144,6 @@ button {
   background: var(--rail);
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 64px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
-  font-weight: 760;
-}
-
-.brand svg {
-  color: var(--accent);
-}
-
 .mode-nav {
   display: grid;
   gap: 4px;
@@ -677,10 +662,6 @@ button {
     top: 0;
     z-index: 2;
     border-right: 0;
-  }
-
-  .brand {
-    min-height: 52px;
   }
 
   .mode-nav {
