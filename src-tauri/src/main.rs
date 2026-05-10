@@ -22,8 +22,6 @@ const MIN_WINDOW_WIDTH: u32 = 960;
 const MIN_WINDOW_HEIGHT: u32 = 540;
 const FALLBACK_WINDOW_WIDTH: u32 = 1280;
 const FALLBACK_WINDOW_HEIGHT: u32 = 720;
-const DIEM_DISPLAY_PERCENT: &str = "percent";
-const DIEM_DISPLAY_ACTUAL: &str = "actual";
 const EDIT_MODEL_PATTERNS: &[&str] = &[
     "inpaint",
     "image_edit",
@@ -49,8 +47,6 @@ struct AppSettings {
     output_dir: String,
     #[serde(default)]
     show_diem_balance: bool,
-    #[serde(default = "default_diem_display_mode")]
-    diem_display_mode: String,
     #[serde(default)]
     window_width: Option<u32>,
     #[serde(default)]
@@ -63,15 +59,10 @@ impl Default for AppSettings {
             theme: "eva-dark".to_string(),
             output_dir: String::new(),
             show_diem_balance: false,
-            diem_display_mode: default_diem_display_mode(),
             window_width: None,
             window_height: None,
         }
     }
-}
-
-fn default_diem_display_mode() -> String {
-    DIEM_DISPLAY_PERCENT.to_string()
 }
 
 fn default_settings(app: &AppHandle) -> AppSettings {
@@ -79,7 +70,6 @@ fn default_settings(app: &AppHandle) -> AppSettings {
         theme: "eva-dark".to_string(),
         output_dir: default_output_dir(app).unwrap_or_default(),
         show_diem_balance: false,
-        diem_display_mode: default_diem_display_mode(),
         window_width: None,
         window_height: None,
     }
@@ -125,7 +115,6 @@ struct SaveSettingsRequest {
     theme: Option<String>,
     output_dir: Option<String>,
     show_diem_balance: Option<bool>,
-    diem_display_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -331,15 +320,7 @@ fn read_settings(app: &AppHandle) -> AppSettings {
     if settings.output_dir.trim().is_empty() {
         settings.output_dir = fallback.output_dir;
     }
-    settings.diem_display_mode = normalize_diem_display_mode(&settings.diem_display_mode);
     settings
-}
-
-fn normalize_diem_display_mode(value: &str) -> String {
-    match value.trim().to_lowercase().as_str() {
-        DIEM_DISPLAY_ACTUAL => DIEM_DISPLAY_ACTUAL.to_string(),
-        _ => DIEM_DISPLAY_PERCENT.to_string(),
-    }
 }
 
 fn save_settings_file(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
@@ -1830,9 +1811,6 @@ fn save_settings(app: AppHandle, request: SaveSettingsRequest) -> Result<AppSett
     }
     if let Some(show_diem_balance) = request.show_diem_balance {
         settings.show_diem_balance = show_diem_balance;
-    }
-    if let Some(diem_display_mode) = request.diem_display_mode {
-        settings.diem_display_mode = normalize_diem_display_mode(&diem_display_mode);
     }
     ensure_output_folders_for_settings(&app, &settings)?;
     save_settings_file(&app, &settings)?;
