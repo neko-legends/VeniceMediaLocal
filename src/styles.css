@@ -193,6 +193,7 @@ button {
 .icon-button,
 .primary-action,
 .secondary-action,
+.scale-option,
 .theme-button {
   border: 1px solid transparent;
   border-radius: 8px;
@@ -519,8 +520,44 @@ button {
 
 .action-row {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.scale-action {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.scale-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 48px);
+  gap: 4px;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.scale-option {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.scale-option:hover,
+.scale-option.active {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
 }
 
 .queue-summary {

@@ -9,6 +9,7 @@ import {
   Image as ImageIcon,
   KeyRound,
   Loader2,
+  Maximize2,
   Mic2,
   Music,
   Plus,
@@ -148,6 +149,7 @@ type Overrides = {
 }
 
 type RecentModels = Partial<Record<ModelKind, string[]>>
+type UpscaleScale = 2 | 4
 
 const STORAGE_OVERRIDES = 'veniceMediaLocal:modelOverrides:v1'
 const STORAGE_CONCURRENCY = 'veniceMediaLocal:concurrency:v1'
@@ -713,6 +715,7 @@ export function App() {
   const [sourceImage, setSourceImage] = useState('')
   const [editSourceImages, setEditSourceImages] = useState<string[]>(() => Array(EDIT_SOURCE_LIMIT).fill(''))
   const [editResolution, setEditResolution] = useState('')
+  const [upscaleScale, setUpscaleScale] = useState<UpscaleScale>(2)
   const [videoDuration, setVideoDuration] = useState('5s')
   const [videoResolution, setVideoResolution] = useState('720p')
   const [videoAspectRatio, setVideoAspectRatio] = useState('16:9')
@@ -1232,6 +1235,28 @@ export function App() {
     })
   }
 
+  function upscaleImage() {
+    const upscaleSource = editSourceImages.find(Boolean) ?? ''
+    if (!upscaleSource) {
+      setError('Choose a source image first')
+      setLastActionMs(null)
+      setStatus('Needs attention')
+      return
+    }
+
+    enqueueJob('edit', `Image upscale ${upscaleScale}x`, async () => {
+      const startedAt = Date.now()
+      const output = await call<MediaResult>('upscale_image', {
+        request: {
+          sourceImage: upscaleSource,
+          scale: upscaleScale,
+        },
+      })
+      rememberModelUse('edit', editModel)
+      setResultGroups((existing) => [createResultGroup([output], `Upscaled ${upscaleScale}x · ${formatElapsed(Date.now() - startedAt)}`), ...existing])
+    })
+  }
+
   async function moveResultFilesToBurn(paths: string[], label: string) {
     const uniquePaths = Array.from(new Set(paths.filter(Boolean)))
     if (uniquePaths.length === 0) return
@@ -1635,6 +1660,24 @@ export function App() {
                     {jobStats.edit.running > 0 ? <Loader2 className="spin" size={18} /> : <Scissors size={18} />}
                     Edit / Combine
                   </button>
+                  <div className="scale-action">
+                    <div className="scale-toggle" role="group" aria-label="Upscale factor">
+                      {[2, 4].map((scale) => (
+                        <button
+                          key={scale}
+                          className={classNames('scale-option', upscaleScale === scale && 'active')}
+                          type="button"
+                          onClick={() => setUpscaleScale(scale as UpscaleScale)}
+                        >
+                          {scale}x
+                        </button>
+                      ))}
+                    </div>
+                    <button className="secondary-action" type="button" onClick={upscaleImage} disabled={!hasEditSource}>
+                      {jobStats.edit.running > 0 ? <Loader2 className="spin" size={18} /> : <Maximize2 size={18} />}
+                      Scale Image
+                    </button>
+                  </div>
                   <button className="primary-action" type="button" onClick={removeBackground} disabled={!hasEditSource}>
                     {jobStats.edit.running > 0 ? <Loader2 className="spin" size={18} /> : <Eraser size={18} />}
                     Remove Background

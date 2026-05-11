@@ -142,6 +142,13 @@ struct BackgroundRemoveRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ImageUpscaleRequest {
+    source_image: String,
+    scale: u8,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ImageMultiEditRequest {
     model: String,
     prompt: String,
@@ -2292,6 +2299,30 @@ async fn remove_background(
 }
 
 #[tauri::command]
+async fn upscale_image(app: AppHandle, request: ImageUpscaleRequest) -> Result<MediaResult, String> {
+    let scale = match request.scale {
+        2 | 4 => request.scale,
+        _ => return Err("Scale must be 2x or 4x".to_string()),
+    };
+    let mut body = image_input_body(&request.source_image)?;
+    body["scale"] = json!(scale);
+
+    let response = venice_post_json("/image/upscale", body.clone()).await?;
+    save_binary_response(
+        &app,
+        response,
+        "edits",
+        &format!("upscaled-{scale}x"),
+        json!({
+            "operation": "image-upscale",
+            "scale": scale,
+            "request": body
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn multi_edit_image(
     app: AppHandle,
     request: ImageMultiEditRequest,
@@ -2795,6 +2826,7 @@ fn main() {
             refresh_models,
             generate_image,
             remove_background,
+            upscale_image,
             multi_edit_image,
             queue_video,
             retrieve_video,

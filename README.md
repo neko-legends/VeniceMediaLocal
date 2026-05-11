@@ -245,6 +245,7 @@ Ignored/generated files include:
 ## Current media surface
 
 - Image generation saves local image files and displays result cards.
+- Edit tools support prompt-based image edit/combine, background removal, and 2x/4x image upscaling.
 - Video, music, and SFX queue jobs through Venice and include polling hooks.
 - Voice generation calls Venice speech and saves local audio files.
 - Output cleanup supports clearing UI cards, moving generated files to the local `burn` folder, and burning that folder.
