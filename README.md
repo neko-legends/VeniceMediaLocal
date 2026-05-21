@@ -122,6 +122,8 @@ That file includes the Tailscale `address`, `port`, `token`, app `version`, and 
 curl -H "Authorization: Bearer <token>" http://<address>/api/v1/state
 ```
 
+(The discovery file contains the exact address and token — no need to guess them.)
+
 If the connection times out, check Tailscale Access Controls. Add a rule where the remote agent machine is the source, the Windows machine running Venice Media Local is the destination, and the port/protocol is:
 
 ```text
@@ -156,6 +158,26 @@ POST /api/v1/burn-folder
 ```
 
 Remote media actions update the already-open Windows GUI live. Navigation, queues, generated results, result clearing, and burn-folder moves should appear in the app as if the human had clicked through the workflow.
+
+Two pitfalls discovered in live use:
+
+**Cache the dataUrl after every generate call.** The generate response includes a base64 `dataUrl` field for each output image. The edit endpoint requires a dataUrl — not a Windows file path. If you don't save it immediately, you will have to re-generate the same image just to recover it. Write it to a temp file right after each generation and read it back when editing.
+
+**Send edit payloads via a file, not via shell arguments.** Edit request bodies contain a full base64 dataUrl and can be 300–400 KB. Passing that on the command line will exceed the OS argument length limit. Always write the JSON body to a temp file and use `--data-binary @/tmp/payload.json` with curl.
+
+#### Agent skill for Hermes
+
+If you are a Hermes agent (or use a compatible skill loader), install the bundled skill:
+
+```text
+agent-skills/venice-local-gui/
+```
+
+Copy that folder into `~/.hermes/skills/` and your agent will know the full API, request shapes, pitfalls, and generate→edit→upscale workflow. The `references/` subfolder includes:
+
+- `implementation-notes.md` — Rust wiring, event emission, design decisions
+- `remote-access-troubleshooting.md` — Tailscale ACL, firewall, discovery file edge cases
+- `venice-local-gui-request-types.md` — exact Rust structs and proven request examples
 
 ## Prerequisites
 
