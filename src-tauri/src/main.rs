@@ -15,7 +15,7 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager, PhysicalSize, Size, WebviewWindow, WindowEvent};
 use axum::{
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
@@ -3582,6 +3582,7 @@ fn start_agent_control_server(
             .route("/api/v1/move-to-burn", post(agent_move_to_burn))
             .route("/api/v1/burn-folder-stats", get(agent_get_burn_folder_stats))
             .route("/api/v1/burn-folder", post(agent_burn_folder))
+            .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB — supports 4K image payloads
             .layer(cors)
             .with_state(state);
 
