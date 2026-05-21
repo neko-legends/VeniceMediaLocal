@@ -119,6 +119,13 @@ struct SaveSettingsRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SaveDataUrlRequest {
+    data_url: String,
+    destination_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ImageGenerationRequest {
     model: String,
     title: Option<String>,
@@ -1807,6 +1814,41 @@ fn copy_media_file(
     Ok(destination.to_string_lossy().to_string())
 }
 
+#[tauri::command]
+fn save_data_url_file(request: SaveDataUrlRequest) -> Result<String, String> {
+    let destination = PathBuf::from(request.destination_path.trim());
+    if destination.as_os_str().is_empty() {
+        return Err("Save location is empty".to_string());
+    }
+    if destination.exists() && destination.is_dir() {
+        return Err(format!(
+            "Save location is a folder, not a file: {}",
+            destination.to_string_lossy()
+        ));
+    }
+
+    let (bytes, _) = decode_data_url(&request.data_url)?;
+    if let Some(parent) = destination.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|err| {
+                format!(
+                    "Failed to create save folder {}: {err}",
+                    parent.to_string_lossy()
+                )
+            })?;
+        }
+    }
+
+    fs::write(&destination, bytes).map_err(|err| {
+        format!(
+            "Failed to save converted file to {}: {err}",
+            destination.to_string_lossy()
+        )
+    })?;
+
+    Ok(destination.to_string_lossy().to_string())
+}
+
 fn collect_burn_entries(
     dir: &Path,
     files: &mut Vec<PathBuf>,
@@ -2058,6 +2100,17 @@ fn open_output_folder(app: AppHandle) -> Result<String, String> {
     let root = ensure_output_folders(&app)?;
     open_folder_path(&root)?;
     Ok(root.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn open_file_folder(path: String) -> Result<String, String> {
+    let file_path = PathBuf::from(path.trim());
+    let folder = file_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "Saved file has no parent folder".to_string())?;
+    open_folder_path(folder)?;
+    Ok(folder.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -2924,9 +2977,11 @@ fn main() {
             get_models,
             move_media_files_to_burn,
             copy_media_file,
+            save_data_url_file,
             get_burn_folder_stats,
             get_diem_balance,
             open_output_folder,
+            open_file_folder,
             burn_folder,
             refresh_models,
             generate_image,

@@ -723,6 +723,12 @@ button {
   right: 8px;
 }
 
+.source-flip {
+  position: absolute;
+  top: 8px;
+  right: 48px;
+}
+
 .source-browse {
   position: absolute;
   right: 8px;

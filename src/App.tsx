@@ -5,6 +5,7 @@ import {
   Download,
   Eraser,
   FileText,
+  FlipHorizontal,
   FolderOpen,
   Image as ImageIcon,
   KeyRound,
@@ -437,6 +438,55 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error ?? new Error('File read failed'))
     reader.readAsDataURL(file)
   })
+}
+
+function dataUrlToImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('Failed to load image data'))
+    image.src = dataUrl
+  })
+}
+
+function canvasToDataUrl(canvas: HTMLCanvasElement, mimeType: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error(`Failed to convert image to ${mimeType}`))
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result ?? ''))
+      reader.onerror = () => reject(reader.error ?? new Error('Image conversion failed'))
+      reader.readAsDataURL(blob)
+    }, mimeType)
+  })
+}
+
+async function convertImageDataUrl(dataUrl: string, mimeType: string): Promise<string> {
+  const image = await dataUrlToImage(dataUrl)
+  const canvas = document.createElement('canvas')
+  canvas.width = image.naturalWidth || image.width
+  canvas.height = image.naturalHeight || image.height
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('Image conversion is not available')
+  context.drawImage(image, 0, 0)
+  return canvasToDataUrl(canvas, mimeType)
+}
+
+async function flipImageDataUrlHorizontal(dataUrl: string): Promise<string> {
+  const image = await dataUrlToImage(dataUrl)
+  const canvas = document.createElement('canvas')
+  canvas.width = image.naturalWidth || image.width
+  canvas.height = image.naturalHeight || image.height
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('Image flip is not available')
+  context.translate(canvas.width, 0)
+  context.scale(-1, 1)
+  context.drawImage(image, 0, 0)
+  const mimeType = dataUrl.match(/^data:([^;,]+)/)?.[1] || 'image/png'
+  return canvasToDataUrl(canvas, mimeType)
 }
 
 function controlArray(model: ModelRecord | undefined, key: string, fallback: string[]): string[] {
@@ -1330,6 +1380,18 @@ export function App() {
     }
   }
 
+  function pathWithExtension(path: string, extension: string) {
+    const normalized = extension.startsWith('.') ? extension : `.${extension}`
+    const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+    const dot = path.lastIndexOf('.')
+    if (dot > slash) return `${path.slice(0, dot)}${normalized}`
+    return `${path}${normalized}`
+  }
+
+  async function openSavedFileFolder(path: string) {
+    await call<string>('open_file_folder', { path }).catch(() => undefined)
+  }
+
   async function saveResultFile(result: MediaResult) {
     const selected = await runAction('Choosing save location', () =>
       saveDialog({
@@ -1352,6 +1414,46 @@ export function App() {
     )
     if (copiedPath) {
       setStatus(`Saved copy: ${copiedPath}`)
+      await openSavedFileFolder(copiedPath)
+    }
+  }
+
+  async function saveImageResultFile(result: MediaResult, format: ImageSaveFormat) {
+    const mimeType = format === 'png' ? 'image/png' : 'image/webp'
+    const selected = await runAction(`Choosing ${format.toUpperCase()} save location`, () =>
+      saveDialog({
+        defaultPath: pathWithExtension(result.filePath || result.name, format),
+        filters: [{ name: format.toUpperCase(), extensions: [format] }],
+        title: `Save ${result.name} as ${format.toUpperCase()}`,
+      }),
+    )
+    if (typeof selected !== 'string' || !selected) {
+      setLastActionMs(null)
+      setStatus('Ready')
+      return
+    }
+
+    const destinationPath = pathWithExtension(selected, format)
+    const sourceAlreadyMatches = result.mimeType.toLowerCase() === mimeType && result.filePath
+    const savedPath = await runAction(`Saving ${format.toUpperCase()}`, async () => {
+      if (sourceAlreadyMatches) {
+        return call<string>('copy_media_file', {
+          sourcePath: result.filePath,
+          destinationPath,
+        })
+      }
+
+      const converted = await convertImageDataUrl(result.dataUrl, mimeType)
+      return call<string>('save_data_url_file', {
+        request: {
+          dataUrl: converted,
+          destinationPath,
+        },
+      })
+    })
+    if (savedPath) {
+      setStatus(`Saved ${format.toUpperCase()}: ${savedPath}`)
+      await openSavedFileFolder(savedPath)
     }
   }
 
@@ -1390,6 +1492,22 @@ export function App() {
 
   function clearEditSourceImage(index: number) {
     setEditSourceImages((existing) => existing.map((source, sourceIndex) => (sourceIndex === index ? '' : source)))
+  }
+
+  async function flipEditSourceImage(index: number) {
+    const source = editSourceImages[index]
+    if (!source) return
+    if (!source.startsWith('data:image/')) {
+      setError('Only loaded image data can be flipped')
+      setStatus('Needs attention')
+      setLastActionMs(null)
+      return
+    }
+
+    const flipped = await runAction('Flipping image', () => flipImageDataUrlHorizontal(source))
+    if (flipped) {
+      setEditSourceImage(index, flipped)
+    }
   }
 
   function sendResultToEdit(result: MediaResult) {
@@ -1677,6 +1795,7 @@ export function App() {
                     source={editSourceImages[0]}
                     onFile={(file) => loadEditSourceImage(0, file)}
                     onSource={(value) => setEditSourceImage(0, value)}
+                    onFlip={() => flipEditSourceImage(0)}
                     onClear={() => clearEditSourceImage(0)}
                   />
                   <div className="edit-source-row">
@@ -1687,6 +1806,7 @@ export function App() {
                         source={editSourceImages[index]}
                         onFile={(file) => loadEditSourceImage(index, file)}
                         onSource={(value) => setEditSourceImage(index, value)}
+                        onFlip={() => flipEditSourceImage(index)}
                         onClear={() => clearEditSourceImage(index)}
                       />
                     ))}
@@ -2000,6 +2120,7 @@ export function App() {
                         key={`${result.id}-${result.filePath}`}
                         result={result}
                         onSave={() => saveResultFile(result)}
+                        onSaveImage={(format) => saveImageResultFile(result, format)}
                         onDelete={() => moveResultFilesToBurn([result.filePath], 'this file')}
                         onEdit={result.mimeType.startsWith('image/') ? () => sendResultToEdit(result) : undefined}
                       />
@@ -2027,11 +2148,25 @@ function fileFilterForResult(result: MediaResult) {
   return { name: 'Media', extensions: ['bin'] }
 }
 
+type ImageSaveFormat = 'png' | 'webp'
+
 function mediaSourceForResult(result: MediaResult) {
   return result.filePath ? convertFileSrc(result.filePath) : result.dataUrl
 }
 
-const ResultCard = memo(function ResultCard({ result, onSave, onDelete, onEdit }: { result: MediaResult; onSave: () => void; onDelete: () => void; onEdit?: () => void }) {
+const ResultCard = memo(function ResultCard({
+  result,
+  onSave,
+  onSaveImage,
+  onDelete,
+  onEdit,
+}: {
+  result: MediaResult
+  onSave: () => void
+  onSaveImage: (format: ImageSaveFormat) => void
+  onDelete: () => void
+  onEdit?: () => void
+}) {
   const modelLabel = resultModelLabel(result)
   const mediaSource = mediaSourceForResult(result)
   const [useDataUrlPreview, setUseDataUrlPreview] = useState(false)
@@ -2063,10 +2198,23 @@ const ResultCard = memo(function ResultCard({ result, onSave, onDelete, onEdit }
         {modelLabel && <small>Model: {modelLabel}</small>}
         <small>{result.filePath}</small>
         <div className="result-links">
-          <button className="link-button" type="button" onClick={onSave}>
-            <Download size={16} />
-            Save
-          </button>
+          {result.mimeType.startsWith('image/') ? (
+            <>
+              <button className="link-button" type="button" onClick={() => onSaveImage('png')}>
+                <Download size={16} />
+                Save PNG
+              </button>
+              <button className="link-button" type="button" onClick={() => onSaveImage('webp')}>
+                <Download size={16} />
+                Save WebP
+              </button>
+            </>
+          ) : (
+            <button className="link-button" type="button" onClick={onSave}>
+              <Download size={16} />
+              Save
+            </button>
+          )}
           {onEdit && (
             <button className="link-button" type="button" onClick={onEdit}>
               <Scissors size={14} />
@@ -2281,6 +2429,7 @@ function SourcePicker({
   source,
   onFile,
   onSource,
+  onFlip,
   onClear,
 }: {
   className?: string
@@ -2288,6 +2437,7 @@ function SourcePicker({
   source: string
   onFile: (file: File) => void | Promise<void>
   onSource?: (source: string) => void
+  onFlip?: () => void | Promise<void>
   onClear?: () => void
 }) {
   const [dragging, setDragging] = useState(false)
@@ -2381,6 +2531,11 @@ function SourcePicker({
       <button className="icon-button compact source-browse" type="button" onClick={() => inputRef.current?.click()} title={`Browse for ${label}`}>
         <FolderOpen size={14} />
       </button>
+      {source && onFlip && (
+        <button className="icon-button compact source-flip" type="button" onClick={onFlip} title={`Flip ${label} horizontally`}>
+          <FlipHorizontal size={14} />
+        </button>
+      )}
       {source && onClear && (
         <button className="icon-button compact source-clear" type="button" onClick={onClear} title={`Clear ${label}`}>
           <Trash2 size={14} />
