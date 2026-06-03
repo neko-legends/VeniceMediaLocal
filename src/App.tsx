@@ -181,6 +181,7 @@ type UpscaleScale = 2 | 4
 const STORAGE_OVERRIDES = 'veniceMediaLocal:modelOverrides:v1'
 const STORAGE_CONCURRENCY = 'veniceMediaLocal:concurrency:v1'
 const STORAGE_RECENT_MODELS = 'veniceMediaLocal:recentModels:v1'
+const STORAGE_LAST_SAVE_DIR = 'veniceMediaLocal:lastSaveDir:v1'
 const EDIT_SOURCE_LIMIT = 3
 const MAX_RECENT_MODELS = 5
 const DIEM_POLL_MS = 3 * 60 * 1000
@@ -379,6 +380,43 @@ function readRecentModels(): RecentModels {
 
 function writeRecentModels(value: RecentModels) {
   localStorage.setItem(STORAGE_RECENT_MODELS, JSON.stringify(normalizeRecentModels(value)))
+}
+
+function readLastSaveDir(): string {
+  try {
+    return localStorage.getItem(STORAGE_LAST_SAVE_DIR) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function writeLastSaveDir(value: string) {
+  localStorage.setItem(STORAGE_LAST_SAVE_DIR, value)
+}
+
+function pathFileName(path: string): string {
+  const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return slash >= 0 ? path.slice(slash + 1) : path
+}
+
+function pathDirectory(path: string): string {
+  const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  if (slash < 0) return ''
+  if (slash === 0) return path.slice(0, 1)
+  if (/^[a-zA-Z]:[\\/]?$/.test(path.slice(0, slash + 1))) return path.slice(0, slash + 1)
+  return path.slice(0, slash)
+}
+
+function joinPath(directory: string, fileName: string): string {
+  if (!directory) return fileName
+  if (!fileName) return directory
+  return /[\\/]$/.test(directory) ? `${directory}${fileName}` : `${directory}\\${fileName}`
+}
+
+function defaultSavePath(preferredPath: string, lastSaveDir: string): string {
+  if (!lastSaveDir) return preferredPath
+  const fileName = pathFileName(preferredPath)
+  return joinPath(lastSaveDir, fileName || preferredPath)
 }
 
 function promoteRecentModel(value: RecentModels, kind: ModelKind, modelId: string): RecentModels {
@@ -741,6 +779,7 @@ export function App() {
   const [lastActionMs, setLastActionMs] = useState<number | null>(null)
   const [overrides, setOverrides] = useState<Overrides>(() => readOverrides())
   const [recentModels, setRecentModels] = useState<RecentModels>(() => readRecentModels())
+  const [lastSaveDir, setLastSaveDir] = useState(() => readLastSaveDir())
   const [concurrency, setConcurrency] = useState<JobConcurrency>(() => readConcurrency())
   const [jobStats, setJobStats] = useState<JobStats>(() => createJobStats())
   const [remoteQueues, setRemoteQueues] = useState<RemoteQueueJob[]>([])
@@ -1561,10 +1600,18 @@ export function App() {
     await call<string>('open_file_folder', { path }).catch(() => undefined)
   }
 
+  function rememberSaveLocation(path: string) {
+    const directory = pathDirectory(path)
+    if (!directory) return
+    setLastSaveDir(directory)
+    writeLastSaveDir(directory)
+  }
+
   async function saveResultFile(result: MediaResult) {
+    const preferredPath = result.filePath || result.name
     const selected = await runAction('Choosing save location', () =>
       saveDialog({
-        defaultPath: result.filePath || result.name,
+        defaultPath: defaultSavePath(preferredPath, lastSaveDir),
         filters: [fileFilterForResult(result)],
         title: `Save ${result.name}`,
       }),
@@ -1582,6 +1629,7 @@ export function App() {
       }),
     )
     if (copiedPath) {
+      rememberSaveLocation(copiedPath)
       setStatus(`Saved copy: ${copiedPath}`)
       await openSavedFileFolder(copiedPath)
     }
@@ -1589,9 +1637,10 @@ export function App() {
 
   async function saveImageResultFile(result: MediaResult, format: ImageSaveFormat) {
     const mimeType = format === 'png' ? 'image/png' : 'image/webp'
+    const preferredPath = pathWithExtension(result.filePath || result.name, format)
     const selected = await runAction(`Choosing ${format.toUpperCase()} save location`, () =>
       saveDialog({
-        defaultPath: pathWithExtension(result.filePath || result.name, format),
+        defaultPath: defaultSavePath(preferredPath, lastSaveDir),
         filters: [{ name: format.toUpperCase(), extensions: [format] }],
         title: `Save ${result.name} as ${format.toUpperCase()}`,
       }),
@@ -1621,6 +1670,7 @@ export function App() {
       })
     })
     if (savedPath) {
+      rememberSaveLocation(savedPath)
       setStatus(`Saved ${format.toUpperCase()}: ${savedPath}`)
       await openSavedFileFolder(savedPath)
     }
