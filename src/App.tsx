@@ -604,6 +604,17 @@ function metadataText(metadata: unknown, paths: string[][]): string {
   return ''
 }
 
+function mediaDownloadUrl(raw: unknown): string {
+  return metadataText(raw, [
+    ['download_url'],
+    ['downloadUrl'],
+    ['url'],
+    ['data', 'download_url'],
+    ['data', 'downloadUrl'],
+    ['data', 'url'],
+  ])
+}
+
 function resultModelLabel(result: MediaResult): string {
   return metadataText(result.metadata, [
     ['model'],
@@ -1242,7 +1253,7 @@ export function App() {
   async function waitForQueuedMedia(kind: 'video' | 'music' | 'sfx', queued: QueueResult, model: string): Promise<MediaResult> {
     const id = remoteQueueId(kind, queued.queueId)
     const endpoint = kind === 'video' ? 'retrieve_video' : 'retrieve_audio'
-    const retrieveKind = kind === 'video' ? 'video' : 'audio'
+    const retrieveKind = kind === 'video' ? 'video' : kind
     setRemoteQueues((existing) => [
       { id, kind, queueId: queued.queueId, status: queued.status, progressLabel: queued.progressLabel, startedAt: Date.now() },
       ...existing.filter((entry) => entry.id !== id),
@@ -1264,7 +1275,7 @@ export function App() {
       })
       currentStatus = output.status
       currentProgress = output.progressLabel
-      downloadUrl = downloadUrl || ''
+      downloadUrl = mediaDownloadUrl(output.raw) || downloadUrl || ''
       setRemoteQueues((existing) =>
         existing.map((entry) =>
           entry.id === id ? { ...entry, status: currentStatus, progressLabel: currentProgress } : entry,

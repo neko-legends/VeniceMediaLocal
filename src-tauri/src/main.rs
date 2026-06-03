@@ -2843,7 +2843,12 @@ async fn retrieve_audio(
     app: AppHandle,
     request: RetrieveRequest,
 ) -> Result<RetrieveResult, String> {
-    retrieve_queued_media(app, request, "/audio/retrieve", "audio").await
+    let default_kind = if matches!(request.kind.as_deref(), Some("sfx")) {
+        "sfx"
+    } else {
+        "audio"
+    };
+    retrieve_queued_media(app, request, "/audio/retrieve", default_kind).await
 }
 
 async fn retrieve_queued_media(
