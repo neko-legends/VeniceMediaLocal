@@ -482,6 +482,10 @@ function writeConcurrency(value: JobConcurrency) {
   localStorage.setItem(STORAGE_CONCURRENCY, JSON.stringify(value))
 }
 
+function queueKindSummary(kind: JobKind, stats: JobStats[JobKind], limit: number): string {
+  return `${JOB_LABELS[kind]} ${stats.running}/${limit} slots, ${stats.queued} waiting`
+}
+
 function normalizeRecentModelIds(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   const seen = new Set<string>()
@@ -1560,7 +1564,11 @@ export function App() {
 
   function updateConcurrency(kind: JobKind, value: number) {
     const nextValue = clampConcurrency(value)
-    setConcurrency((existing) => ({ ...existing, [kind]: nextValue }))
+    const next = { ...concurrencyRef.current, [kind]: nextValue }
+    concurrencyRef.current = next
+    writeConcurrency(next)
+    setConcurrency(next)
+    pumpJobs(kind)
   }
 
   function enqueueJob(kind: JobKind, label: string, run: () => Promise<void>) {
@@ -2994,7 +3002,12 @@ export function App() {
                     <div>
                       <span className="eyebrow">Local Queue</span>
                       <strong>{runningJobCount} running · {queuedJobCount} waiting</strong>
-                      <small>{JOB_KINDS.filter((kind) => jobStats[kind].running > 0 || jobStats[kind].queued > 0).map((kind) => `${JOB_LABELS[kind]} ${jobStats[kind].running}/${jobStats[kind].queued}`).join(' · ')}</small>
+                      <small>
+                        {JOB_KINDS
+                          .filter((kind) => jobStats[kind].running > 0 || jobStats[kind].queued > 0)
+                          .map((kind) => queueKindSummary(kind, jobStats[kind], concurrency[kind]))
+                          .join(' · ')}
+                      </small>
                     </div>
                   </div>
                 )}
