@@ -25,6 +25,7 @@ import {
   Video,
   Volume2,
   Wand2,
+  X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { ChangeEvent, ClipboardEvent, DragEvent, FocusEvent, FormEvent, MouseEvent, ReactNode, memo, useEffect, useMemo, useRef, useState } from 'react'
@@ -220,6 +221,13 @@ type RemoteQueueJob = {
   status: string
   progressLabel: string
   startedAt: number
+}
+
+class QueueCancelledError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'QueueCancelledError'
+  }
 }
 
 type Overrides = {
@@ -1053,6 +1061,7 @@ export function App() {
   const jobQueuesRef = useRef<Record<JobKind, LocalJob[]>>(createJobQueues())
   const runningJobsRef = useRef<Record<JobKind, number>>(createJobCounts())
   const runningJobStartsRef = useRef<Record<JobKind, number[]>>(createJobStartQueues())
+  const cancelledRemoteQueueIdsRef = useRef(new Set<string>())
   const concurrencyRef = useRef<JobConcurrency>(concurrency)
   const pointerSeedRef = useRef(0n)
   const pointerFrameRef = useRef<number | null>(null)
@@ -1263,6 +1272,7 @@ export function App() {
     listen<AgentQueuePayload>('agent:queue', (event) => {
       const payload = event.payload
       const id = remoteQueueId(payload.kind, payload.queueId)
+      cancelledRemoteQueueIdsRef.current.delete(id)
       setRemoteQueues((existing) => [
         { id, kind: payload.kind, queueId: payload.queueId, status: payload.status, progressLabel: payload.progressLabel, startedAt: Date.now() },
         ...existing.filter((entry) => entry.id !== id),
@@ -1554,6 +1564,10 @@ export function App() {
     } catch (err) {
       const duration = Date.now() - startedAt
       setLastActionMs(duration)
+      if (err instanceof QueueCancelledError) {
+        setStatus(`${job.label} cancelled`)
+        return
+      }
       setError(err instanceof Error ? err.message : String(err))
       setStatus(`${job.label} failed`)
       setJobStats((existing) => ({
@@ -1576,10 +1590,18 @@ export function App() {
     return `${kind}-${queueId}`
   }
 
+  function cancelRemoteQueue(id: string) {
+    cancelledRemoteQueueIdsRef.current.add(id)
+    setRemoteQueues((existing) => existing.filter((entry) => entry.id !== id))
+    setStatus('Venice queue closed')
+    setLastActionMs(null)
+  }
+
   async function waitForQueuedMedia(kind: 'video' | 'music' | 'sfx', queued: QueueResult, model: string): Promise<MediaResult> {
     const id = remoteQueueId(kind, queued.queueId)
     const endpoint = kind === 'video' ? 'retrieve_video' : 'retrieve_audio'
     const retrieveKind = kind === 'video' ? 'video' : kind
+    cancelledRemoteQueueIdsRef.current.delete(id)
     setRemoteQueues((existing) => [
       { id, kind, queueId: queued.queueId, status: queued.status, progressLabel: queued.progressLabel, startedAt: Date.now() },
       ...existing.filter((entry) => entry.id !== id),
@@ -1590,7 +1612,15 @@ export function App() {
     let downloadUrl = queued.downloadUrl
 
     while (ACTIVE_QUEUE_STATUSES.has(currentStatus.toLowerCase())) {
+      if (cancelledRemoteQueueIdsRef.current.has(id)) {
+        cancelledRemoteQueueIdsRef.current.delete(id)
+        throw new QueueCancelledError(`${JOB_LABELS[kind]} Venice queue closed`)
+      }
       await sleep(7000)
+      if (cancelledRemoteQueueIdsRef.current.has(id)) {
+        cancelledRemoteQueueIdsRef.current.delete(id)
+        throw new QueueCancelledError(`${JOB_LABELS[kind]} Venice queue closed`)
+      }
       const output = await call<RetrieveResult>(endpoint, {
         request: {
           queueId: queued.queueId,
@@ -1602,6 +1632,10 @@ export function App() {
       currentStatus = output.status
       currentProgress = output.progressLabel
       downloadUrl = mediaDownloadUrl(output.raw) || downloadUrl || ''
+      if (cancelledRemoteQueueIdsRef.current.has(id)) {
+        cancelledRemoteQueueIdsRef.current.delete(id)
+        throw new QueueCancelledError(`${JOB_LABELS[kind]} Venice queue closed`)
+      }
       setRemoteQueues((existing) =>
         existing.map((entry) =>
           entry.id === id ? { ...entry, status: currentStatus, progressLabel: currentProgress } : entry,
@@ -2922,7 +2956,17 @@ export function App() {
                       <strong>{entry.queueId}</strong>
                       <small>{entry.progressLabel || entry.status} · {formatElapsed(jobNow - entry.startedAt)}</small>
                     </div>
-                    <Loader2 className="spin" size={18} />
+                    <div className="queue-panel-actions">
+                      <Loader2 className="spin" size={18} />
+                      <button
+                        className="icon-button compact"
+                        type="button"
+                        onClick={() => cancelRemoteQueue(entry.id)}
+                        title="Close queue"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

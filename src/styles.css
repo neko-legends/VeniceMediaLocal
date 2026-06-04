@@ -933,6 +933,13 @@ button {
   min-width: 0;
 }
 
+.queue-panel .queue-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .queue-panel strong,
 .queue-panel small {
   overflow: hidden;
