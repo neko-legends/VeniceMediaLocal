@@ -3816,6 +3816,18 @@ fn emit_agent_queue(app: &AppHandle, kind: &str, queue: &QueueResult) {
     }
 }
 
+fn emit_agent_queue_status(app: &AppHandle, kind: &str, queue_id: &str, status: &str, progress_label: &str) {
+    let payload = AgentQueuePayload {
+        kind: kind.to_string(),
+        queue_id: queue_id.to_string(),
+        status: status.to_string(),
+        progress_label: progress_label.to_string(),
+    };
+    if let Err(error) = app.emit("agent:queue", payload) {
+        eprintln!("[agent-control] Failed to emit queue status: {error}");
+    }
+}
+
 fn emit_agent_remove_result_paths(app: &AppHandle, paths: Vec<String>, status: String) {
     let payload = AgentRemoveResultPathsPayload { paths, status };
     if let Err(error) = app.emit("agent:remove-result-paths", payload) {
@@ -3947,9 +3959,17 @@ async fn agent_retrieve_video(
     if should_agent_navigate(&payload) {
         emit_agent_navigate(&state.app, "video", "Remote video retrieval started");
     }
+    let queue_id = payload.request.queue_id.clone();
     let output = retrieve_video(state.app.clone(), payload.request)
         .await
         .map_err(agent_error)?;
+    emit_agent_queue_status(
+        &state.app,
+        "video",
+        &queue_id,
+        &output.status,
+        &output.progress_label,
+    );
     if let Some(result) = output.result.clone() {
         emit_agent_results(&state.app, "Video · Remote", vec![result]);
     }
@@ -3999,14 +4019,23 @@ async fn agent_retrieve_audio(
         .kind
         .as_deref()
         .filter(|kind| *kind == "sfx")
-        .unwrap_or("music");
+        .unwrap_or("music")
+        .to_string();
     if should_agent_navigate(&payload) {
-        emit_agent_navigate(&state.app, mode, "Remote audio retrieval started");
+        emit_agent_navigate(&state.app, &mode, "Remote audio retrieval started");
     }
     let title = if mode == "sfx" { "SFX · Remote" } else { "Music · Remote" };
+    let queue_id = payload.request.queue_id.clone();
     let output = retrieve_audio(state.app.clone(), payload.request)
         .await
         .map_err(agent_error)?;
+    emit_agent_queue_status(
+        &state.app,
+        &mode,
+        &queue_id,
+        &output.status,
+        &output.progress_label,
+    );
     if let Some(result) = output.result.clone() {
         emit_agent_results(&state.app, title, vec![result]);
     }

@@ -1272,11 +1272,27 @@ export function App() {
     listen<AgentQueuePayload>('agent:queue', (event) => {
       const payload = event.payload
       const id = remoteQueueId(payload.kind, payload.queueId)
+      if (!ACTIVE_QUEUE_STATUSES.has(payload.status.toLowerCase())) {
+        setRemoteQueues((existing) => existing.filter((entry) => entry.id !== id))
+        setStatus(`Remote ${JOB_LABELS[payload.kind]} ${payload.progressLabel || payload.status}`)
+        setLastActionMs(null)
+        return
+      }
       cancelledRemoteQueueIdsRef.current.delete(id)
-      setRemoteQueues((existing) => [
-        { id, kind: payload.kind, queueId: payload.queueId, status: payload.status, progressLabel: payload.progressLabel, startedAt: Date.now() },
-        ...existing.filter((entry) => entry.id !== id),
-      ])
+      setRemoteQueues((existing) => {
+        const existingEntry = existing.find((entry) => entry.id === id)
+        return [
+          {
+            id,
+            kind: payload.kind,
+            queueId: payload.queueId,
+            status: payload.status,
+            progressLabel: payload.progressLabel,
+            startedAt: existingEntry?.startedAt ?? Date.now(),
+          },
+          ...existing.filter((entry) => entry.id !== id),
+        ]
+      })
       setStatus(`Remote ${JOB_LABELS[payload.kind]} queued`)
       setLastActionMs(null)
     }).then((unlisten) => {
