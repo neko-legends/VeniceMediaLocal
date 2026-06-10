@@ -3,6 +3,7 @@ node_modules/
 
 # Frontend build output
 dist/
+release/
 .vite/
 
 # Tauri/Rust generated output
