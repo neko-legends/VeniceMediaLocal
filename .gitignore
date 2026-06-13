@@ -28,5 +28,11 @@ generated/
 # Logs and OS/editor noise
 *.log
 *.tmp
+*.exe
+*.msi
+*.dmg
+*.zip
+*.7z
+*.tar.gz
 .DS_Store
 Thumbs.db
