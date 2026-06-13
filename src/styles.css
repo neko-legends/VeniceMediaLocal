@@ -1461,3 +1461,89 @@ button {
     grid-template-columns: 1fr;
   }
 }
+
+/* Camera angle helper (approximate angle, no GPU) in the Edit tab */
+.angle-helper {
+  border: 1px solid #2a2c31;
+  border-radius: 10px;
+  background: #161719;
+  margin-top: 4px;
+}
+.angle-helper-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  color: #dbdee1;
+  font-size: 13px;
+  cursor: pointer;
+}
+.angle-helper-toggle .angle-helper-hint {
+  margin-left: auto;
+  color: #9aa0aa;
+  font-size: 11px;
+}
+.angle-helper-body {
+  padding: 4px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid #2a2c31;
+}
+.angle-helper-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.angle-helper-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  font-size: 12px;
+  color: #9aa0aa;
+}
+.angle-helper-row input[type='range'] {
+  flex: 1;
+  accent-color: #f2a65a;
+}
+.angle-helper-row label span {
+  min-width: 38px;
+  text-align: right;
+  color: #dbdee1;
+  font-variant-numeric: tabular-nums;
+}
+.angle-helper-row select {
+  background: #1e1f22;
+  color: #dbdee1;
+  border: 1px solid #2a2c31;
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.angle-helper-preview {
+  margin: 0;
+  padding: 8px 10px;
+  background: #0f1011;
+  border-radius: 6px;
+  color: #c7cad0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.angle-helper-insert {
+  align-self: flex-start;
+  padding: 7px 14px;
+  background: #f2a65a;
+  color: #1a1206;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.angle-helper-insert:hover {
+  background: #f7b96f;
+}

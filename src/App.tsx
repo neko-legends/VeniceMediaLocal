@@ -31,6 +31,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { ChangeEvent, ClipboardEvent, DragEvent, FocusEvent, FormEvent, MouseEvent, ReactNode, memo, useEffect, useMemo, useRef, useState } from 'react'
+import { AngleHelper } from './AngleHelper'
 
 const APP_ICON_URL = '/app-icon.png'
 const APP_BOOT_STARTED_AT = typeof performance !== 'undefined' ? performance.now() : 0
@@ -2694,6 +2695,11 @@ export function App() {
                   </div>
                 </div>
                 <PromptArea value={prompt} onChange={setPrompt} />
+                <AngleHelper
+                  onInsert={(instruction) =>
+                    setPrompt((current) => (current.trim() ? `${current.trim()} ${instruction}` : instruction))
+                  }
+                />
                 <div className="control-grid">
                   <SelectField label="Aspect Ratio" value={selectedEditAspectRatio} onChange={setEditAspectRatio} options={editRatios} />
                   {editResolutions.length > 0 && (
