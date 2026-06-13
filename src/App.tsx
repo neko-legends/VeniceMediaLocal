@@ -7,7 +7,9 @@ import {
   Database,
   Download,
   Eraser,
+  EyeOff,
   FileText,
+  Flame,
   FlipHorizontal,
   FolderOpen,
   Image as ImageIcon,
@@ -73,9 +75,13 @@ type ModelCache = {
 type AppSettings = {
   theme: ThemeId
   outputDir: string
+  writeMetadataSidecars: boolean
+  privateSession: boolean
+  genericFilenames: boolean
   showDiemBalance: boolean
   enableAgentControl: boolean
   agentControlPort: number
+  agentControlBindAll: boolean
   agentControlToken?: string
 }
 
@@ -1092,7 +1098,7 @@ function AgentControlBusyModal({ message }: { message: string }) {
 export function App() {
   const [mode, setMode] = useState<ModeId>('image')
   const [models, setModels] = useState<ModelCache>(fallbackModels)
-  const [settings, setSettings] = useState<AppSettings>({ theme: readStoredTheme(), outputDir: '', showDiemBalance: false, enableAgentControl: false, agentControlPort: DEFAULT_AGENT_CONTROL_PORT, agentControlToken: undefined })
+  const [settings, setSettings] = useState<AppSettings>({ theme: readStoredTheme(), outputDir: '', writeMetadataSidecars: true, privateSession: false, genericFilenames: false, showDiemBalance: false, enableAgentControl: false, agentControlPort: DEFAULT_AGENT_CONTROL_PORT, agentControlBindAll: false, agentControlToken: undefined })
   const [agentControlPortDraft, setAgentControlPortDraft] = useState(String(DEFAULT_AGENT_CONTROL_PORT))
   const [startupReady, setStartupReady] = useState(false)
   const [startupTimingSummary, setStartupTimingSummary] = useState<StartupTimingSummary | null>(null)
@@ -1265,9 +1271,13 @@ export function App() {
         setSettings({
           ...state.settings,
           theme,
+          writeMetadataSidecars: state.settings.writeMetadataSidecars !== false,
+          privateSession: Boolean(state.settings.privateSession),
+          genericFilenames: Boolean(state.settings.genericFilenames || false),
           showDiemBalance: Boolean(state.settings.showDiemBalance),
           enableAgentControl: Boolean(state.settings.enableAgentControl || false),
           agentControlPort: Number(state.settings.agentControlPort || DEFAULT_AGENT_CONTROL_PORT),
+          agentControlBindAll: Boolean(state.settings.agentControlBindAll || false),
         })
         setAgentControlPortDraft(String(state.settings.agentControlPort || DEFAULT_AGENT_CONTROL_PORT))
         applyTheme(theme)
@@ -1845,7 +1855,7 @@ export function App() {
       const address = await call<string>('get_agent_control_address')
       setAgentControlAddress(address)
     } catch {
-      setAgentControlAddress(`0.0.0.0:${settings.agentControlPort || DEFAULT_AGENT_CONTROL_PORT}`)
+      setAgentControlAddress(`127.0.0.1:${settings.agentControlPort || DEFAULT_AGENT_CONTROL_PORT}`)
     }
   }
 
@@ -1867,9 +1877,13 @@ export function App() {
     if (saved) {
       setSettings({
         ...saved,
+        writeMetadataSidecars: saved.writeMetadataSidecars !== false,
+        privateSession: Boolean(saved.privateSession),
+        genericFilenames: Boolean(saved.genericFilenames || false),
         showDiemBalance: Boolean(saved.showDiemBalance),
         enableAgentControl: Boolean(saved.enableAgentControl),
         agentControlPort: Number(saved.agentControlPort || DEFAULT_AGENT_CONTROL_PORT),
+        agentControlBindAll: Boolean(saved.agentControlBindAll || false),
       })
       setAgentControlPortDraft(String(saved.agentControlPort || DEFAULT_AGENT_CONTROL_PORT))
       if (saved.enableAgentControl) {
@@ -1890,6 +1904,23 @@ export function App() {
     if (!saved && isThemeId(previousTheme)) {
       applyTheme(previousTheme)
       writeStoredTheme(previousTheme)
+    }
+  }
+
+  async function togglePrivateSession() {
+    const enabled = !settings.privateSession
+    const saved = await persistSettings({ ...settings, privateSession: enabled })
+    if (saved) {
+      setStatus(enabled ? 'Private session on' : 'Private session off')
+    }
+  }
+
+  async function burnPrivateSession() {
+    const confirmed = window.confirm('Move the entire private session folder into the burn folder? Files are staged for the burn workflow and can be corrupted/deleted from the burn folder next.')
+    if (!confirmed) return
+    const stats = await runAction('Moving private session to burn folder', () => call<BurnFolderStats>('move_private_session_to_burn'))
+    if (stats) {
+      setStatus(`Private session moved to burn folder. Burn folder has ${stats.fileCount.toLocaleString()} file${stats.fileCount === 1 ? '' : 's'}.`)
     }
   }
 
@@ -1926,9 +1957,11 @@ export function App() {
       if (saved) {
         setSettings({
           ...saved,
+          genericFilenames: Boolean(saved.genericFilenames || false),
           showDiemBalance: Boolean(saved.showDiemBalance),
           enableAgentControl: Boolean(saved.enableAgentControl),
           agentControlPort: Number(saved.agentControlPort || DEFAULT_AGENT_CONTROL_PORT),
+          agentControlBindAll: Boolean(saved.agentControlBindAll || false),
         })
         setAgentControlPortDraft(String(saved.agentControlPort || DEFAULT_AGENT_CONTROL_PORT))
         if (saved.enableAgentControl) {
@@ -2131,7 +2164,7 @@ export function App() {
     const seedForBurn = formatBurnSeed(burnSeedRef.current)
     const sizeLabel = formatByteCount(stats.totalBytes) || '0 KB'
     const confirmed = window.confirm(
-      `Burn ${stats.fileCount.toLocaleString()} file${stats.fileCount === 1 ? '' : 's'} (${sizeLabel}) from the burn folder?\n\nCorrupts and deletes files from the burn folder, bypassing the Recycle Bin. Successfully overwritten files should be unreadable if recovered.\n\nBurn seed: ${seedForBurn}\n${stats.burnDir}`,
+      `Burn ${stats.fileCount.toLocaleString()} file${stats.fileCount === 1 ? '' : 's'} (${sizeLabel}) from the burn folder?\n\nBest-effort corrupts and deletes files from the burn folder, bypassing the Recycle Bin. On SSDs or journaled filesystems, the OS or drive may retain old blocks.\n\nBurn seed: ${seedForBurn}\n${stats.burnDir}`,
     )
     if (!confirmed) {
       setLastActionMs(null)
@@ -2541,6 +2574,23 @@ export function App() {
             <p>{keyConfigured ? 'API key ready' : 'API key missing'} · Models: {formatDate(models.lastFetched)}</p>
           </div>
           <div className="topbar-actions">
+            {settings.privateSession && <span className="private-badge">PRIVATE</span>}
+            <button
+              className={classNames('icon-button', 'private-toggle', settings.privateSession && 'active')}
+              type="button"
+              onClick={togglePrivateSession}
+              title={settings.privateSession ? 'Private Session is on' : 'Private Session'}
+            >
+              <EyeOff size={18} />
+            </button>
+            <button
+              className="icon-button danger"
+              type="button"
+              onClick={burnPrivateSession}
+              title="Move private session to burn folder"
+            >
+              <Flame size={18} />
+            </button>
             <button className="icon-button" type="button" onClick={() => setMode('settings')} title="Settings">
               <Settings size={18} />
             </button>
@@ -2978,6 +3028,26 @@ export function App() {
                       <FolderOpen size={18} />
                     </button>
                   </div>
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={settings.writeMetadataSidecars}
+                      disabled={settings.privateSession}
+                      onChange={(event) => persistSettings({ ...settings, writeMetadataSidecars: event.target.checked })}
+                    />
+                    <span>Write metadata sidecars</span>
+                  </label>
+                  <small className="field-help">Private Session always skips sidecars.</small>
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={settings.genericFilenames || settings.privateSession}
+                      disabled={settings.privateSession}
+                      onChange={(event) => persistSettings({ ...settings, genericFilenames: event.target.checked })}
+                    />
+                    <span>Generic filenames</span>
+                  </label>
+                  <small className="field-help">Uses timestamp and seed filenames instead of prompt or title text. Private Session always uses generic filenames.</small>
                 </div>
 
                 <div className="settings-block">
@@ -3005,8 +3075,22 @@ export function App() {
                     <span>Enable AI Agent Remote Control</span>
                   </label>
                   <small className="field-help">
-                    Starts a local HTTP API on the selected port. This is always off when the app launches and must be enabled manually. AI agents on the same Tailscale network (recommended) or trusted local LAN can trigger generations and edits. Results appear live in this window.
+                    Starts a local HTTP API on the selected port. This is always off when the app launches and must be enabled manually. By default it binds to your Tailscale IP when available, otherwise 127.0.0.1.
                   </small>
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={settings.agentControlBindAll}
+                      disabled={Boolean(agentControlBusyMessage)}
+                      onChange={(event) => persistSettings({ ...settings, agentControlBindAll: event.target.checked })}
+                    />
+                    <span>Bind all interfaces</span>
+                  </label>
+                  {settings.agentControlBindAll && (
+                    <small className="field-help danger-help">
+                      This exposes Agent Control on 0.0.0.0. Use it only on a trusted network with a fresh token.
+                    </small>
+                  )}
                   <label className="field">
                     <span>Control Port</span>
                     <input
@@ -3054,25 +3138,25 @@ export function App() {
                         </div>
                       </label>
                       <label className="field">
-                        <span>Tailscale Address</span>
+                        <span>Control Address</span>
                         <div className="agent-value-row">
                           <input
                             className="agent-value-input"
-                            value={agentControlAddress || `0.0.0.0:${settings.agentControlPort || DEFAULT_AGENT_CONTROL_PORT}`}
+                            value={agentControlAddress || `127.0.0.1:${settings.agentControlPort || DEFAULT_AGENT_CONTROL_PORT}`}
                             readOnly
                           />
                           <button
                             type="button"
                             className="agent-copy-button"
-                            onClick={() => copyAgentControlValue(agentControlAddress || `0.0.0.0:${settings.agentControlPort || DEFAULT_AGENT_CONTROL_PORT}`, 'Tailscale address')}
-                            title="Copy Tailscale address"
+                            onClick={() => copyAgentControlValue(agentControlAddress || `127.0.0.1:${settings.agentControlPort || DEFAULT_AGENT_CONTROL_PORT}`, 'Control address')}
+                            title="Copy control address"
                           >
                             Copy
                           </button>
                         </div>
                       </label>
                       <small className="field-help">
-                        The server binds locally on 0.0.0.0:{settings.agentControlPort || DEFAULT_AGENT_CONTROL_PORT}. Give the agent the Tailscale address and control token above. If the agent times out, open Tailscale Access controls and add a rule allowing the remote agent source to reach this local machine destination on the same TCP port.
+                        Give the agent this address and control token. If using Tailscale and the agent times out, check that Tailscale Access controls allow the remote agent source to reach this machine on the selected TCP port.
                       </small>
                     </div>
                   )}

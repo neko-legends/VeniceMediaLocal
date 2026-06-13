@@ -375,6 +375,27 @@ button {
   color: var(--danger);
 }
 
+.private-toggle.active {
+  background: #20242f;
+  border-color: #d7b34c;
+  color: #f0ca63;
+  box-shadow: 0 0 0 2px rgba(215, 179, 76, .16);
+}
+
+.private-badge {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #d7b34c;
+  border-radius: 7px;
+  padding: 0 9px;
+  color: #f4ce6d;
+  background: rgba(215, 179, 76, .12);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
 .burn-button {
   background: color-mix(in srgb, #f2a65a 86%, var(--surface-2));
   border-color: color-mix(in srgb, #f2a65a 72%, var(--border));
@@ -494,6 +515,10 @@ button {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.danger-help {
+  color: #ff9f8b;
 }
 
 .field input,

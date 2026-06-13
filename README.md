@@ -2,7 +2,7 @@
 
 Venice Media Local is a fan-made desktop app for the Venice community. It lets you use your own Venice API key to generate media locally, with images, video, music, sound effects, voice, and speech-to-text grouped into one workspace.
 
-The purpose is simple: keep your API key and generated files on your machine, make heavy media sessions easier than a browser tab, and give users a privacy-minded cleanup path. Normal file deletion can leave recoverable traces for forensic tools, so this app has a burn folder workflow that overwrites/corrupts files before deleting them.
+The purpose is simple: keep your API key and generated files on your machine, make heavy media sessions easier than a browser tab, and give users a privacy-minded cleanup path. Normal file deletion can leave recoverable traces for forensic tools, so this app has a burn folder workflow that best-effort overwrites/corrupts files before deleting them. On SSDs or journaled filesystems, the OS or drive may retain old blocks.
 
 This project is independent from Venice and is not affiliated with, endorsed by, or maintained by Venice. It is built around Venice's API for people who want direct control over their own keys, generated files, and local creative workflow.
 
@@ -52,8 +52,12 @@ The goal is simple:
 - Image, video, music, sound effects, and voice in one app.
 - No chat UI and no text-agent clutter.
 - Results save to local files automatically. Images default to WebP to keep files smaller.
+- Metadata sidecars are written next to normal generated files by default as `file.ext.json` using the Neko Media Sidecar v1 schema. Turn this off in Settings if you do not want recipe JSON beside outputs.
+- Generic filenames can be enabled in Settings to avoid putting prompt/title text into filenames. Private Session implies generic filenames automatically.
+- Private Session is a one-click header toggle. When it is on, outputs go under `private\`, a `.nekoignore` marker is created there, filenames are generic, and metadata sidecars are never written.
 - Clear only removes result cards from the app. Trash moves generated files into the output folder's `burn` subfolder.
-- The burn button corrupts and deletes files from the burn folder, bypassing the Recycle Bin. Successfully overwritten files should be unreadable if recovered.
+- The burn button best-effort corrupts and deletes files from the burn folder, bypassing the Recycle Bin. On SSDs, wear leveling/TRIM and filesystem journals can still leave old blocks outside app control.
+- Burn also handles generated sidecars. If another library has already copied a generated file or recipe into its own vault, use that library's own permanent delete/shred action too; Venice Media Local only burns files inside its output folder.
 - Settings shows a live burn seed that updates from time and mouse movement, then mixes into the burn overwrite pass.
 - Models can be refreshed from Venice and managed locally.
 - The app can expose Venice API features in one place, even when different Venice clients expose those features differently.
@@ -120,7 +124,7 @@ Agents should start by reading the discovery file on the Windows machine:
 %APPDATA%\community.venice.media.local\control-api.json
 ```
 
-That file includes the Tailscale `address`, `port`, `token`, app `version`, and bind address. Use the token as a Bearer token:
+That file includes the `address`, `port`, `token`, app `version`, and bind address. By default the server binds to the Tailscale IPv4 address when available, otherwise `127.0.0.1`. Binding `0.0.0.0` is an explicit Settings opt-in with a warning. Use the token as a Bearer token:
 
 ```bash
 curl -H "Authorization: Bearer <token>" http://<address>/api/v1/state

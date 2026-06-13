@@ -1,10 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use axum::{
+    extract::{DefaultBodyLimit, State},
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
+    routing::{get, post},
+    Json, Router,
+};
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{Local, Utc};
 use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::{
     cmp::Ordering,
     collections::HashSet,
@@ -15,13 +22,6 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager, PhysicalSize, Size, WebviewWindow, WindowEvent};
-use axum::{
-    extract::{DefaultBodyLimit, State},
-    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
-    routing::{get, post},
-    Json, Router,
-};
-use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tower_http::cors::{Any, CorsLayer};
@@ -53,11 +53,21 @@ const EDIT_MODEL_PATTERNS: &[&str] = &[
     "mask image",
 ];
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AppSettings {
     theme: String,
     output_dir: String,
+    #[serde(default = "default_true")]
+    write_metadata_sidecars: bool,
+    #[serde(default)]
+    private_session: bool,
+    #[serde(default)]
+    generic_filenames: bool,
     #[serde(default)]
     show_diem_balance: bool,
     #[serde(default)]
@@ -70,6 +80,8 @@ struct AppSettings {
     #[serde(default = "default_agent_control_port")]
     agent_control_port: u16,
     #[serde(default)]
+    agent_control_bind_all: bool,
+    #[serde(default)]
     agent_control_token: Option<String>,
 }
 
@@ -78,11 +90,15 @@ impl Default for AppSettings {
         Self {
             theme: "eva-dark".to_string(),
             output_dir: String::new(),
+            write_metadata_sidecars: true,
+            private_session: false,
+            generic_filenames: false,
             show_diem_balance: false,
             window_width: None,
             window_height: None,
             enable_agent_control: false,
             agent_control_port: default_agent_control_port(),
+            agent_control_bind_all: false,
             agent_control_token: None,
         }
     }
@@ -92,11 +108,15 @@ fn default_settings(app: &AppHandle) -> AppSettings {
     AppSettings {
         theme: "eva-dark".to_string(),
         output_dir: default_output_dir(app).unwrap_or_default(),
+        write_metadata_sidecars: true,
+        private_session: false,
+        generic_filenames: false,
         show_diem_balance: false,
         window_width: None,
         window_height: None,
         enable_agent_control: false,
         agent_control_port: default_agent_control_port(),
+        agent_control_bind_all: false,
         agent_control_token: None,
     }
 }
@@ -157,9 +177,13 @@ struct StartupTimings {
 struct SaveSettingsRequest {
     theme: Option<String>,
     output_dir: Option<String>,
+    write_metadata_sidecars: Option<bool>,
+    private_session: Option<bool>,
+    generic_filenames: Option<bool>,
     show_diem_balance: Option<bool>,
     enable_agent_control: Option<bool>,
     agent_control_port: Option<u16>,
+    agent_control_bind_all: Option<bool>,
     // We do not allow the frontend to set the token directly for security
 }
 
@@ -273,6 +297,7 @@ struct MediaResult {
     name: String,
     mime_type: String,
     data_url: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     file_path: String,
     metadata: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -370,7 +395,6 @@ struct GithubReleaseAsset {
     browser_download_url: String,
     size: Option<u64>,
 }
-
 
 // Handle for dynamically starting/stopping the agent control HTTP server
 // when the user toggles the setting in the UI (no app restart needed).
@@ -472,24 +496,48 @@ fn tailscale_ipv4_address() -> Option<String> {
         .map(str::to_string)
 }
 
-fn agent_control_address(port: u16) -> String {
-    tailscale_ipv4_address()
-        .map(|ip| format!("{ip}:{port}"))
-        .unwrap_or_else(|| format!("0.0.0.0:{port}"))
+fn agent_control_bind_host(bind_all: bool) -> String {
+    if bind_all {
+        "0.0.0.0".to_string()
+    } else {
+        tailscale_ipv4_address().unwrap_or_else(|| "127.0.0.1".to_string())
+    }
+}
+
+fn agent_control_address(port: u16, bind_all: bool) -> String {
+    let host = agent_control_bind_host(bind_all);
+    if host == "0.0.0.0" {
+        tailscale_ipv4_address()
+            .map(|ip| format!("{ip}:{port}"))
+            .unwrap_or_else(|| format!("127.0.0.1:{port}"))
+    } else {
+        format!("{host}:{port}")
+    }
 }
 
 /// Write the control-api.json discovery file so agents / the skill can auto-discover
 /// the address, port and token without manual config.
-fn write_agent_control_discovery(app: &AppHandle, token: &str, port: u16) -> Result<(), String> {
+fn write_agent_control_discovery(
+    app: &AppHandle,
+    token: &str,
+    port: u16,
+    bind_all: bool,
+) -> Result<(), String> {
     let dir = app_data_dir(app)?;
     let tailscale_ip = tailscale_ipv4_address();
-    let address = tailscale_ip
-        .as_ref()
-        .map(|ip| format!("{ip}:{port}"))
-        .unwrap_or_else(|| format!("0.0.0.0:{port}"));
+    let bind_host = agent_control_bind_host(bind_all);
+    let address = if bind_host == "0.0.0.0" {
+        tailscale_ip
+            .as_ref()
+            .map(|ip| format!("{ip}:{port}"))
+            .unwrap_or_else(|| format!("127.0.0.1:{port}"))
+    } else {
+        format!("{bind_host}:{port}")
+    };
     let discovery = serde_json::json!({
         "address": address,
-        "bindAddress": format!("0.0.0.0:{port}"),
+        "bindAddress": format!("{bind_host}:{port}"),
+        "bindAll": bind_all,
         "tailscaleIp": tailscale_ip,
         "port": port,
         "token": token,
@@ -562,15 +610,16 @@ fn save_settings_file(app: &AppHandle, settings: &AppSettings) -> Result<(), Str
     write_json_file(&path, settings)
 }
 
-fn force_agent_control_off_on_launch(app: &AppHandle) {
+fn force_session_settings_off_on_launch(app: &AppHandle) {
     let mut settings = read_settings(app);
-    if !settings.enable_agent_control {
+    if !settings.enable_agent_control && !settings.private_session {
         return;
     }
 
     settings.enable_agent_control = false;
+    settings.private_session = false;
     if let Err(err) = save_settings_file(app, &settings) {
-        eprintln!("[agent-control] Failed to reset launch state: {err}");
+        eprintln!("[settings] Failed to reset launch state: {err}");
     }
 }
 
@@ -1316,14 +1365,22 @@ fn audio_duration_controls_from_raw(raw: &Value) -> DurationControls {
             spec,
             constraints,
             capabilities,
-            &["min_duration", "min_duration_seconds", "minimum_duration_seconds"],
+            &[
+                "min_duration",
+                "min_duration_seconds",
+                "minimum_duration_seconds",
+            ],
         ),
         max: model_number_field(
             raw,
             spec,
             constraints,
             capabilities,
-            &["max_duration", "max_duration_seconds", "maximum_duration_seconds"],
+            &[
+                "max_duration",
+                "max_duration_seconds",
+                "maximum_duration_seconds",
+            ],
         ),
         default: model_number_field(
             raw,
@@ -1724,7 +1781,13 @@ fn normalize_model(entry: Value, model_type: &str) -> Option<ModelRecord> {
             let controls = if is_edit {
                 let mut controls = edit_controls_for_model(&id, &name);
                 controls["aspectRatioOptions"] = json!(if size_options.is_empty() {
-                    vec!["1:1".to_string(), "4:3".to_string(), "3:4".to_string(), "16:9".to_string(), "9:16".to_string()]
+                    vec![
+                        "1:1".to_string(),
+                        "4:3".to_string(),
+                        "3:4".to_string(),
+                        "16:9".to_string(),
+                        "9:16".to_string(),
+                    ]
                 } else {
                     size_options
                 });
@@ -2008,7 +2071,10 @@ fn sniff_media_mime(bytes: &[u8]) -> Option<&'static str> {
 
 fn effective_mime_type<'a>(declared: &'a str, bytes: &'a [u8]) -> &'a str {
     let normalized = declared.trim();
-    if normalized.is_empty() || normalized == "application/octet-stream" || normalized == "binary/octet-stream" {
+    if normalized.is_empty()
+        || normalized == "application/octet-stream"
+        || normalized == "binary/octet-stream"
+    {
         sniff_media_mime(bytes).unwrap_or("application/octet-stream")
     } else {
         normalized
@@ -2055,6 +2121,24 @@ fn ensure_output_folders(app: &AppHandle) -> Result<PathBuf, String> {
     ensure_output_folders_for_settings(app, &settings)
 }
 
+fn ensure_private_root(root: &Path) -> Result<PathBuf, String> {
+    let private_root = root.join("private");
+    fs::create_dir_all(&private_root).map_err(|err| err.to_string())?;
+    let marker = private_root.join(".nekoignore");
+    if !marker.exists() {
+        fs::write(&marker, b"").map_err(|err| err.to_string())?;
+    }
+    Ok(private_root)
+}
+
+fn output_dir_for_kind(root: &Path, kind: &str, settings: &AppSettings) -> Result<PathBuf, String> {
+    if settings.private_session {
+        Ok(ensure_private_root(root)?.join(kind))
+    } else {
+        Ok(root.join(kind))
+    }
+}
+
 fn metadata_number(metadata: &Value, key: &str) -> Option<u64> {
     metadata.get(key).and_then(|value| {
         value
@@ -2082,6 +2166,12 @@ fn image_file_stem(metadata: &Value) -> Option<String> {
     Some(format!("{date}_seed-{seed}_v{variant}{title_suffix}"))
 }
 
+fn generic_file_stem(metadata: &Value, timestamp: &str) -> String {
+    metadata_number(metadata, "seed")
+        .map(|seed| format!("{timestamp}-seed-{seed}"))
+        .unwrap_or_else(|| timestamp.to_string())
+}
+
 fn unique_file_path(dir: &Path, stem: &str, ext: &str) -> (String, PathBuf) {
     let mut name = format!("{stem}.{ext}");
     let mut path = dir.join(&name);
@@ -2092,6 +2182,157 @@ fn unique_file_path(dir: &Path, stem: &str, ext: &str) -> (String, PathBuf) {
         attempt += 1;
     }
     (name, path)
+}
+
+fn sidecar_kind_for_folder(kind: &str) -> &'static str {
+    match kind {
+        "images" => "image",
+        "edits" => "edit",
+        "videos" => "video",
+        "audio" => "audio",
+        "sfx" => "sfx",
+        "voice" => "voice",
+        "transcripts" => "transcript",
+        _ => "image",
+    }
+}
+
+fn media_sidecar_path(path: &Path) -> Option<PathBuf> {
+    let file_name = path.file_name()?.to_str()?;
+    Some(path.with_file_name(format!("{file_name}.json")))
+}
+
+fn companion_sidecar_paths(path: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(full_suffix) = media_sidecar_path(path) {
+        paths.push(full_suffix);
+    }
+    let legacy = path.with_extension("json");
+    if !paths.iter().any(|existing| existing == &legacy) {
+        paths.push(legacy);
+    }
+    paths
+}
+
+fn is_companion_sidecar(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("json"))
+        .unwrap_or(false)
+        && path.with_extension("").is_file()
+}
+
+fn sidecar_value_string(metadata: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        metadata.get(*key).and_then(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| value.as_u64().map(|number| number.to_string()))
+                .or_else(|| value.as_i64().map(|number| number.to_string()))
+                .or_else(|| value.as_f64().map(|number| number.to_string()))
+        })
+    })
+}
+
+fn sidecar_value_i64(metadata: &Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        metadata
+            .get(*key)
+            .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
+    })
+}
+
+fn sidecar_value_f64(metadata: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| {
+        metadata
+            .get(*key)
+            .and_then(|value| value.as_f64().or_else(|| value.as_str()?.parse().ok()))
+    })
+}
+
+fn sidecar_value_u64(metadata: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| {
+        metadata
+            .get(*key)
+            .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+    })
+}
+
+fn source_files_from_metadata(metadata: &Value) -> Vec<String> {
+    if let Some(files) = metadata.get("sourceFiles").and_then(Value::as_array) {
+        return files
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+    }
+    metadata
+        .get("fileName")
+        .and_then(Value::as_str)
+        .map(|file| vec![file.to_string()])
+        .unwrap_or_default()
+}
+
+fn tags_from_metadata(metadata: &Value) -> Vec<String> {
+    metadata
+        .get("tags")
+        .and_then(Value::as_array)
+        .map(|tags| {
+            tags.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn media_sidecar_json(
+    app: &AppHandle,
+    kind: &str,
+    prompt: &str,
+    mime_type: &str,
+    metadata: &Value,
+) -> Value {
+    json!({
+        "schema": "nekolegends.media-sidecar",
+        "schemaVersion": 1,
+        "app": "venice-media-local",
+        "appVersion": app.package_info().version.to_string(),
+        "kind": sidecar_kind_for_folder(kind),
+        "createdAt": Utc::now().to_rfc3339(),
+        "mimeType": mime_type,
+        "prompt": sidecar_value_string(metadata, &["prompt"]).unwrap_or_else(|| prompt.to_string()),
+        "negativePrompt": sidecar_value_string(metadata, &["negativePrompt", "negative_prompt"]),
+        "model": sidecar_value_string(metadata, &["model", "modelId"]),
+        "seed": sidecar_value_string(metadata, &["seed"]),
+        "sampler": sidecar_value_string(metadata, &["sampler"]),
+        "steps": sidecar_value_i64(metadata, &["steps"]),
+        "cfgScale": sidecar_value_f64(metadata, &["cfgScale", "cfg_scale", "cfg"]),
+        "variantIndex": sidecar_value_u64(metadata, &["variantIndex"]),
+        "title": sidecar_value_string(metadata, &["title"]),
+        "durationSeconds": sidecar_value_f64(metadata, &["durationSeconds", "duration_seconds"]),
+        "sourceFiles": source_files_from_metadata(metadata),
+        "tags": tags_from_metadata(metadata),
+        "raw": metadata.get("raw").cloned().unwrap_or_else(|| metadata.clone())
+    })
+}
+
+fn write_media_sidecar(
+    app: &AppHandle,
+    path: &Path,
+    kind: &str,
+    prompt: &str,
+    mime_type: &str,
+    metadata: &Value,
+) -> Result<(), String> {
+    let Some(sidecar_path) = media_sidecar_path(path) else {
+        return Ok(());
+    };
+    let sidecar = media_sidecar_json(app, kind, prompt, mime_type, metadata);
+    write_json_file(&sidecar_path, &sidecar)
 }
 
 fn save_media_bytes(
@@ -2105,19 +2346,27 @@ fn save_media_bytes(
     let settings = read_settings(app);
     let mime_type = effective_mime_type(mime_type, bytes);
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S-%3f").to_string();
-    let stem = safe_stem(prompt);
     let ext = extension_for_mime(mime_type);
-    let dir = ensure_output_folders_for_settings(app, &settings)?.join(kind);
+    let root = ensure_output_folders_for_settings(app, &settings)?;
+    let dir = output_dir_for_kind(&root, kind, &settings)?;
     fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    let variant_suffix = metadata
-        .get("variantIndex")
-        .and_then(|value| value.as_u64())
-        .map(|index| format!("-v{index}"))
-        .unwrap_or_default();
-    let file_stem =
-        image_file_stem(&metadata).unwrap_or_else(|| format!("{timestamp}-{stem}{variant_suffix}"));
+    let file_stem = if settings.private_session || settings.generic_filenames {
+        generic_file_stem(&metadata, &timestamp)
+    } else {
+        let stem = safe_stem(prompt);
+        let variant_suffix = metadata
+            .get("variantIndex")
+            .and_then(|value| value.as_u64())
+            .map(|index| format!("-v{index}"))
+            .unwrap_or_default();
+        image_file_stem(&metadata)
+            .unwrap_or_else(|| format!("{timestamp}-{stem}{variant_suffix}"))
+    };
     let (name, path) = unique_file_path(&dir, &file_stem, ext);
     fs::write(&path, bytes).map_err(|err| err.to_string())?;
+    if settings.write_metadata_sidecars && !settings.private_session {
+        write_media_sidecar(app, &path, kind, prompt, mime_type, &metadata)?;
+    }
     let encoded = general_purpose::STANDARD.encode(bytes);
     Ok(MediaResult {
         id: format!("{kind}-{name}"),
@@ -2222,9 +2471,37 @@ fn move_media_files_to_burn(app: AppHandle, paths: Vec<String>) -> Result<Vec<St
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("media.bin");
+        let sidecars = companion_sidecar_paths(&path)
+            .into_iter()
+            .filter(|sidecar| sidecar.is_file())
+            .collect::<Vec<_>>();
         let target = unique_burn_path(&burn_dir, file_name, index);
         fs::rename(&path, &target)
             .map_err(|err| format!("Failed to move {trimmed} to burn folder: {err}"))?;
+        for (sidecar_index, sidecar) in sidecars.into_iter().enumerate() {
+            ensure_under_output(&app, &sidecar)?;
+            let sidecar_target = if sidecar_index == 0 {
+                media_sidecar_path(&target).unwrap_or_else(|| {
+                    let name = sidecar
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("media.json");
+                    unique_burn_path(&burn_dir, name, index)
+                })
+            } else {
+                let name = sidecar
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("media.json");
+                unique_burn_path(&burn_dir, name, index + sidecar_index)
+            };
+            fs::rename(&sidecar, &sidecar_target).map_err(|err| {
+                format!(
+                    "Failed to move sidecar {} to burn folder: {err}",
+                    sidecar.to_string_lossy()
+                )
+            })?;
+        }
         if !target.is_file() {
             return Err(format!(
                 "Move finished but the burn folder file was not found: {}",
@@ -2235,6 +2512,25 @@ fn move_media_files_to_burn(app: AppHandle, paths: Vec<String>) -> Result<Vec<St
     }
 
     Ok(moved)
+}
+
+#[tauri::command]
+fn move_private_session_to_burn(app: AppHandle) -> Result<BurnFolderStats, String> {
+    let settings = read_settings(&app);
+    let root = output_root(&app, &settings)?;
+    let private_root = root.join("private");
+    if !private_root.exists() {
+        return burn_folder_stats_for_dir(&ensure_burn_dir(&app)?);
+    }
+    ensure_under_output(&app, &private_root)?;
+    let burn_dir = ensure_burn_dir(&app)?;
+    let target = unique_burn_path(&burn_dir, "private", 0);
+    fs::rename(&private_root, &target)
+        .map_err(|err| format!("Failed to move private session to burn folder: {}", err))?;
+    if settings.private_session {
+        let _ = ensure_private_root(&root);
+    }
+    burn_folder_stats_for_dir(&burn_dir)
 }
 
 #[tauri::command]
@@ -2368,13 +2664,19 @@ fn burn_folder_stats_for_dir(dir: &Path) -> Result<BurnFolderStats, String> {
 
     let mut total_bytes = 0;
     for path in &files {
+        if is_companion_sidecar(path) {
+            continue;
+        }
         total_bytes += fs::symlink_metadata(path)
             .map(|metadata| metadata.len())
             .unwrap_or(0);
     }
 
     Ok(BurnFolderStats {
-        file_count: files.len(),
+        file_count: files
+            .iter()
+            .filter(|path| !is_companion_sidecar(path))
+            .count(),
         total_bytes,
         burn_dir: dir.to_string_lossy().to_string(),
     })
@@ -2618,7 +2920,10 @@ fn open_url(url: &str) -> Result<(), String> {
 
 fn run_file(path: &Path) -> Result<(), String> {
     if !path.is_file() {
-        return Err(format!("Update installer was not found: {}", path.to_string_lossy()));
+        return Err(format!(
+            "Update installer was not found: {}",
+            path.to_string_lossy()
+        ));
     }
 
     Command::new(path)
@@ -2846,13 +3151,14 @@ fn collect_app_state(
     });
 
     let app_state_total_ms = elapsed_ms(total_started_at);
+    let agent_control_port = settings.agent_control_port;
 
     Ok(AppState {
+        agent_control_address: agent_control_address(agent_control_port, settings.agent_control_bind_all),
         settings,
         key_configured: false,
         models,
         build_version,
-        agent_control_address: format!("0.0.0.0:{}", settings.agent_control_port),
         startup_timings: StartupTimings {
             setup_sections,
             app_state_sections: sections,
@@ -2877,7 +3183,10 @@ fn get_key_configured() -> Result<bool, String> {
 #[tauri::command]
 fn get_agent_control_address(app: AppHandle) -> Result<String, String> {
     let settings = read_settings(&app);
-    Ok(agent_control_address(settings.agent_control_port))
+    Ok(agent_control_address(
+        settings.agent_control_port,
+        settings.agent_control_bind_all,
+    ))
 }
 
 #[tauri::command]
@@ -2893,14 +3202,27 @@ fn save_settings(
     if let Some(output_dir) = request.output_dir {
         settings.output_dir = output_dir.trim().to_string();
     }
+    if let Some(write_metadata_sidecars) = request.write_metadata_sidecars {
+        settings.write_metadata_sidecars = write_metadata_sidecars;
+    }
+    if let Some(private_session) = request.private_session {
+        settings.private_session = private_session;
+    }
+    if let Some(generic_filenames) = request.generic_filenames {
+        settings.generic_filenames = generic_filenames;
+    }
     if let Some(show_diem_balance) = request.show_diem_balance {
         settings.show_diem_balance = show_diem_balance;
     }
     let was_enabled = settings.enable_agent_control;
     let previous_port = settings.agent_control_port;
+    let previous_bind_all = settings.agent_control_bind_all;
 
     if let Some(port) = request.agent_control_port {
         settings.agent_control_port = validate_agent_control_port(port)?;
+    }
+    if let Some(bind_all) = request.agent_control_bind_all {
+        settings.agent_control_bind_all = bind_all;
     }
 
     if let Some(enable) = request.enable_agent_control {
@@ -2913,7 +3235,13 @@ fn save_settings(
         // Live start / stop when the user toggles in Settings (no restart needed)
         if enable && !was_enabled {
             if let Some(token) = settings.agent_control_token.clone() {
-                start_agent_control_server(app.clone(), token, settings.agent_control_port, &handle)?;
+                start_agent_control_server(
+                    app.clone(),
+                    token,
+                    settings.agent_control_port,
+                    settings.agent_control_bind_all,
+                    &handle,
+                )?;
             }
         } else if !enable && was_enabled {
             stop_agent_control_server(&handle);
@@ -2922,11 +3250,18 @@ fn save_settings(
 
     if settings.enable_agent_control
         && was_enabled
-        && settings.agent_control_port != previous_port
+        && (settings.agent_control_port != previous_port
+            || settings.agent_control_bind_all != previous_bind_all)
     {
         stop_agent_control_server(&handle);
         if let Some(token) = settings.agent_control_token.clone() {
-            start_agent_control_server(app.clone(), token, settings.agent_control_port, &handle)?;
+            start_agent_control_server(
+                app.clone(),
+                token,
+                settings.agent_control_port,
+                settings.agent_control_bind_all,
+                &handle,
+            )?;
         }
     }
 
@@ -2946,7 +3281,13 @@ fn rotate_agent_control_token(
     if settings.enable_agent_control {
         stop_agent_control_server(&handle);
         if let Some(token) = settings.agent_control_token.clone() {
-            start_agent_control_server(app.clone(), token, settings.agent_control_port, &handle)?;
+            start_agent_control_server(
+                app.clone(),
+                token,
+                settings.agent_control_port,
+                settings.agent_control_bind_all,
+                &handle,
+            )?;
         }
     }
 
@@ -2985,7 +3326,9 @@ fn get_models(app: AppHandle) -> Result<ModelCache, String> {
     Ok(read_model_cache(&app))
 }
 
-fn preferred_update_assets(assets: &[GithubReleaseAsset]) -> (Option<UpdateAsset>, Option<UpdateAsset>) {
+fn preferred_update_assets(
+    assets: &[GithubReleaseAsset],
+) -> (Option<UpdateAsset>, Option<UpdateAsset>) {
     let setup = assets
         .iter()
         .find(|asset| {
@@ -3321,7 +3664,10 @@ async fn multi_edit_image(
     if let Some(value) = request.resolution.filter(|value| !value.trim().is_empty()) {
         body["resolution"] = json!(value);
     }
-    if let Some(value) = request.aspect_ratio.filter(|value| !value.trim().is_empty()) {
+    if let Some(value) = request
+        .aspect_ratio
+        .filter(|value| !value.trim().is_empty())
+    {
         body["aspect_ratio"] = json!(value);
     }
     if let Some(value) = request.safe_mode {
@@ -3351,7 +3697,10 @@ fn video_control_option_supported(controls: Option<&Value>, key: &str, value: &s
         return true;
     };
 
-    items.iter().filter_map(Value::as_str).any(|option| option == value)
+    items
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|option| option == value)
 }
 
 #[tauri::command]
@@ -3359,7 +3708,10 @@ async fn queue_video(app: AppHandle, request: QueueMediaRequest) -> Result<Queue
     queue_video_inner(&app, request).await
 }
 
-async fn queue_video_inner(app: &AppHandle, request: QueueMediaRequest) -> Result<QueueResult, String> {
+async fn queue_video_inner(
+    app: &AppHandle,
+    request: QueueMediaRequest,
+) -> Result<QueueResult, String> {
     let cached_controls = read_model_cache(app)
         .video_models
         .into_iter()
@@ -3823,7 +4175,6 @@ async fn generate_speech(app: AppHandle, request: SpeechRequest) -> Result<Media
     .await
 }
 
-
 // === AI Agent Remote Control HTTP Server ===
 // Supports live toggle: when the user turns "AI Agent Control" on in Settings,
 // the server starts immediately. When turned off, it shuts down gracefully.
@@ -3894,7 +4245,10 @@ struct AgentRemoveResultPathsPayload {
 type AgentApiError = (StatusCode, String);
 
 fn check_agent_token(state: &AgentControlState, headers: &HeaderMap) -> Result<(), AgentApiError> {
-    let Some(auth) = headers.get(AUTHORIZATION).and_then(|value| value.to_str().ok()) else {
+    let Some(auth) = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+    else {
         return Err((StatusCode::UNAUTHORIZED, "Missing bearer token".to_string()));
     };
     if auth == format!("Bearer {}", state.token) {
@@ -3951,7 +4305,13 @@ fn emit_agent_queue(app: &AppHandle, kind: &str, queue: &QueueResult) {
     }
 }
 
-fn emit_agent_queue_status(app: &AppHandle, kind: &str, queue_id: &str, status: &str, progress_label: &str) {
+fn emit_agent_queue_status(
+    app: &AppHandle,
+    kind: &str,
+    queue_id: &str,
+    status: &str,
+    progress_label: &str,
+) {
     let payload = AgentQueuePayload {
         kind: kind.to_string(),
         queue_id: queue_id.to_string(),
@@ -3972,6 +4332,35 @@ fn emit_agent_remove_result_paths(app: &AppHandle, paths: Vec<String>, status: S
 
 fn should_agent_navigate<T>(request: &AgentRequest<T>) -> bool {
     request.navigate.unwrap_or(true)
+}
+
+fn sanitize_agent_media_result(app: &AppHandle, mut result: MediaResult) -> MediaResult {
+    if read_settings(app).private_session {
+        result.file_path.clear();
+    }
+    result
+}
+
+fn sanitize_agent_media_results(app: &AppHandle, results: Vec<MediaResult>) -> Vec<MediaResult> {
+    if !read_settings(app).private_session {
+        return results;
+    }
+    results
+        .into_iter()
+        .map(|mut result| {
+            result.file_path.clear();
+            result
+        })
+        .collect()
+}
+
+fn sanitize_agent_retrieve_result(app: &AppHandle, mut result: RetrieveResult) -> RetrieveResult {
+    if read_settings(app).private_session {
+        if let Some(media) = result.result.as_mut() {
+            media.file_path.clear();
+        }
+    }
+    result
 }
 
 async fn agent_get_state(
@@ -4008,7 +4397,7 @@ async fn agent_generate_image(
         .await
         .map_err(agent_error)?;
     emit_agent_results(&state.app, "Images · Remote", results.clone());
-    Ok(Json(results))
+    Ok(Json(sanitize_agent_media_results(&state.app, results)))
 }
 
 async fn agent_refresh_models(
@@ -4016,7 +4405,9 @@ async fn agent_refresh_models(
     headers: HeaderMap,
 ) -> Result<Json<ModelCache>, AgentApiError> {
     check_agent_token(&state, &headers)?;
-    let cache = refresh_models(state.app.clone()).await.map_err(agent_error)?;
+    let cache = refresh_models(state.app.clone())
+        .await
+        .map_err(agent_error)?;
     if let Err(error) = state.app.emit("agent:models", cache.clone()) {
         eprintln!("[agent-control] Failed to emit model cache: {error}");
     }
@@ -4036,7 +4427,7 @@ async fn agent_edit_image(
         .await
         .map_err(agent_error)?;
     emit_agent_results(&state.app, "Edit / Combine · Remote", vec![result.clone()]);
-    Ok(Json(result))
+    Ok(Json(sanitize_agent_media_result(&state.app, result)))
 }
 
 async fn agent_remove_background(
@@ -4051,8 +4442,12 @@ async fn agent_remove_background(
     let result = remove_background(state.app.clone(), payload.request)
         .await
         .map_err(agent_error)?;
-    emit_agent_results(&state.app, "Background Removed · Remote", vec![result.clone()]);
-    Ok(Json(result))
+    emit_agent_results(
+        &state.app,
+        "Background Removed · Remote",
+        vec![result.clone()],
+    );
+    Ok(Json(sanitize_agent_media_result(&state.app, result)))
 }
 
 async fn agent_upscale_image(
@@ -4068,7 +4463,7 @@ async fn agent_upscale_image(
         .await
         .map_err(agent_error)?;
     emit_agent_results(&state.app, "Upscaled Image · Remote", vec![result.clone()]);
-    Ok(Json(result))
+    Ok(Json(sanitize_agent_media_result(&state.app, result)))
 }
 
 async fn agent_queue_video(
@@ -4110,7 +4505,7 @@ async fn agent_retrieve_video(
     if let Some(result) = output.result.clone() {
         emit_agent_results(&state.app, "Video · Remote", vec![result]);
     }
-    Ok(Json(output))
+    Ok(Json(sanitize_agent_retrieve_result(&state.app, output)))
 }
 
 async fn agent_queue_music(
@@ -4161,7 +4556,11 @@ async fn agent_retrieve_audio(
     if should_agent_navigate(&payload) {
         emit_agent_navigate(&state.app, &mode, "Remote audio retrieval started");
     }
-    let title = if mode == "sfx" { "SFX · Remote" } else { "Music · Remote" };
+    let title = if mode == "sfx" {
+        "SFX · Remote"
+    } else {
+        "Music · Remote"
+    };
     let queue_id = payload.request.queue_id.clone();
     let output = retrieve_audio(state.app.clone(), payload.request)
         .await
@@ -4176,7 +4575,7 @@ async fn agent_retrieve_audio(
     if let Some(result) = output.result.clone() {
         emit_agent_results(&state.app, title, vec![result]);
     }
-    Ok(Json(output))
+    Ok(Json(sanitize_agent_retrieve_result(&state.app, output)))
 }
 
 async fn agent_generate_speech(
@@ -4192,7 +4591,7 @@ async fn agent_generate_speech(
         .await
         .map_err(agent_error)?;
     emit_agent_results(&state.app, "Voice · Remote", vec![result.clone()]);
-    Ok(Json(result))
+    Ok(Json(sanitize_agent_media_result(&state.app, result)))
 }
 
 async fn agent_transcribe_audio(
@@ -4208,7 +4607,7 @@ async fn agent_transcribe_audio(
         .await
         .map_err(agent_error)?;
     emit_agent_results(&state.app, "Speech -> Text · Remote", vec![result.clone()]);
-    Ok(Json(result))
+    Ok(Json(sanitize_agent_media_result(&state.app, result)))
 }
 
 async fn agent_open_output_folder(
@@ -4234,7 +4633,10 @@ async fn agent_clear_results(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AgentApiError> {
     check_agent_token(&state, &headers)?;
-    if let Err(error) = state.app.emit("agent:clear-results", json!({ "status": "Remote cleared results" })) {
+    if let Err(error) = state.app.emit(
+        "agent:clear-results",
+        json!({ "status": "Remote cleared results" }),
+    ) {
         eprintln!("[agent-control] Failed to emit clear results: {error}");
     }
     Ok(Json(json!({ "ok": true })))
@@ -4282,6 +4684,7 @@ fn start_agent_control_server(
     app: AppHandle,
     token: String,
     port: u16,
+    bind_all: bool,
     handle: &AgentControlHandle,
 ) -> Result<(), String> {
     if token.is_empty() {
@@ -4297,7 +4700,8 @@ fn start_agent_control_server(
         }
     }
 
-    let addr: SocketAddr = format!("0.0.0.0:{port}")
+    let bind_host = agent_control_bind_host(bind_all);
+    let addr: SocketAddr = format!("{bind_host}:{port}")
         .parse()
         .map_err(|error| format!("Invalid agent control bind address: {error}"))?;
     let std_listener = StdTcpListener::bind(addr).map_err(|error| {
@@ -4314,7 +4718,7 @@ fn start_agent_control_server(
         .map_err(|error| format!("Failed to configure agent control listener: {error}"))?;
 
     // Write discovery only after bind succeeds, so agents never pick up a dead token.
-    if let Err(e) = write_agent_control_discovery(&app, &token, port) {
+    if let Err(e) = write_agent_control_discovery(&app, &token, port, bind_all) {
         eprintln!("[agent-control] Could not write discovery file: {}", e);
     }
 
@@ -4356,13 +4760,19 @@ fn start_agent_control_server(
             .route("/api/v1/open-burn-folder", post(agent_open_burn_folder))
             .route("/api/v1/clear-results", post(agent_clear_results))
             .route("/api/v1/move-to-burn", post(agent_move_to_burn))
-            .route("/api/v1/burn-folder-stats", get(agent_get_burn_folder_stats))
+            .route(
+                "/api/v1/burn-folder-stats",
+                get(agent_get_burn_folder_stats),
+            )
             .route("/api/v1/burn-folder", post(agent_burn_folder))
             .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100 MB — supports 4K image payloads
             .layer(cors)
             .with_state(state);
 
-        println!("[agent-control] Starting HTTP server on {} (for AI agents over Tailscale)", addr);
+        println!(
+            "[agent-control] Starting HTTP server on {} (for AI agents over Tailscale)",
+            addr
+        );
 
         let listener = match TcpListener::from_std(std_listener) {
             Ok(l) => l,
@@ -4373,11 +4783,10 @@ fn start_agent_control_server(
         };
 
         // Graceful shutdown when the user turns the toggle off
-        let server = axum::serve(listener, router)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-                println!("[agent-control] Shutdown signal received, stopping HTTP server");
-            });
+        let server = axum::serve(listener, router).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+            println!("[agent-control] Shutdown signal received, stopping HTTP server");
+        });
 
         if let Err(e) = server.await {
             eprintln!("[agent-control] Server error: {}", e);
@@ -4394,7 +4803,6 @@ fn stop_agent_control_server(handle: &AgentControlHandle) {
         println!("[agent-control] Shutdown requested for agent control server");
     }
 }
-
 
 fn main() {
     tauri::Builder::default()
@@ -4418,8 +4826,8 @@ fn main() {
 
             let app_handle = app.handle().clone();
             let started_at = Instant::now();
-            force_agent_control_off_on_launch(&app_handle);
-            metrics.push("reset agent control launch state", started_at);
+            force_session_settings_off_on_launch(&app_handle);
+            metrics.push("reset session launch state", started_at);
 
             let started_at = Instant::now();
             if let Some(window) = app.get_webview_window("main") {
@@ -4450,6 +4858,7 @@ fn main() {
             clear_api_key,
             get_models,
             move_media_files_to_burn,
+            move_private_session_to_burn,
             copy_media_file,
             save_data_url_file,
             get_burn_folder_stats,
@@ -4476,4 +4885,31 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Venice Media Local");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generic_file_stem_uses_timestamp_and_seed_only() {
+        let metadata = json!({
+            "seed": "12345",
+            "title": "secret prompt title",
+            "variantIndex": 9
+        });
+        assert_eq!(
+            generic_file_stem(&metadata, "20260612-120000-000"),
+            "20260612-120000-000-seed-12345"
+        );
+    }
+
+    #[test]
+    fn prompt_stem_is_not_used_for_empty_generic_metadata() {
+        let metadata = json!({});
+        assert_eq!(
+            generic_file_stem(&metadata, "20260612-120000-000"),
+            "20260612-120000-000"
+        );
+    }
 }

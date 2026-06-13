@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nekolegends.com/schemas/media-sidecar.v1.schema.json",
+  "title": "Neko Media Sidecar v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "schemaVersion", "app", "kind", "createdAt"],
+  "properties": {
+    "schema": {
+      "const": "nekolegends.media-sidecar"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "app": {
+      "type": "string",
+      "minLength": 1
+    },
+    "appVersion": {
+      "type": ["string", "null"]
+    },
+    "kind": {
+      "enum": ["image", "edit", "video", "audio", "sfx", "voice", "transcript", "atlas"]
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "mimeType": {
+      "type": ["string", "null"]
+    },
+    "prompt": {
+      "type": ["string", "null"]
+    },
+    "negativePrompt": {
+      "type": ["string", "null"]
+    },
+    "model": {
+      "type": ["string", "null"]
+    },
+    "seed": {
+      "type": ["string", "number", "integer", "null"]
+    },
+    "sampler": {
+      "type": ["string", "null"]
+    },
+    "steps": {
+      "type": ["integer", "null"]
+    },
+    "cfgScale": {
+      "type": ["number", "null"]
+    },
+    "variantIndex": {
+      "type": ["integer", "null"]
+    },
+    "title": {
+      "type": ["string", "null"]
+    },
+    "durationSeconds": {
+      "type": ["number", "null"]
+    },
+    "sourceFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "raw": {
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    }
+  }
+}
